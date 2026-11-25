@@ -818,6 +818,23 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(MissionControlMotionRecorder.drawnLine([]), "ours")
     }
 
+    func testTheFilmedBandIs150PointsUnlessAskedOtherwise() {
+        XCTAssertEqual(MissionControlMotionRecorder.band(0, displayHeight: 1440), 150)
+        XCTAssertEqual(MissionControlMotionRecorder.band(-20, displayHeight: 1440), 150)
+        XCTAssertEqual(MissionControlMotionRecorder.band(80, displayHeight: 1440), 80)
+    }
+
+    func testTheFilmedBandIsEven() {
+        XCTAssertEqual(MissionControlMotionRecorder.band(151, displayHeight: 1440), 152)
+        XCTAssertEqual(MissionControlMotionRecorder.band(100.4, displayHeight: 1440), 100)
+        XCTAssertEqual(MissionControlMotionRecorder.band(0.5, displayHeight: 1440), 2)
+    }
+
+    func testTheFilmedBandStaysWithinTheDisplay() {
+        XCTAssertEqual(MissionControlMotionRecorder.band(5000, displayHeight: 1440), 1440)
+        XCTAssertEqual(MissionControlMotionRecorder.band(5000, displayHeight: 1117), 1116)
+    }
+
     func testTheTallyWaitsForItsInterval() {
         var tally = FrameTally(interval: 5)
         XCTAssertNil(tally.count(.complete(shown: 10, written: true), at: 10.01))

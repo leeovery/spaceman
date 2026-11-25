@@ -6,18 +6,20 @@
 //  slides from beside where it draws its labels, frame by frame, so the timings in DockMotion can be
 //  checked and fitted on this Mac. Everything goes to ~/Library/Caches/<bundle id>/motion.log, stamped
 //  with system uptime. For each frame the labels draw it writes an "ours" line: every label shown, as
-//  its space's ID at its frame in AX points, where the frame reaching the screen at the stamped time
-//  shows it, slides and moves the window server animates included.
+//  its space's ID at its frame in AX points, where Spaceman placed it for the frame reaching the screen
+//  at the stamped time, the slides and moves it hands the window server worked out for that time. The
+//  window server sometimes shows a slide as it was a frame earlier, which only the film below can show.
+//  When the labels are hidden it writes "ours" alone.
 //
 //  With the missionControlMotionVideo default as well, it also films Mission Control's own captions:
 //  it streams the top of the main display with ScreenCaptureKit, without Spaceman's windows, and saves
 //  it as video at one pixel a point to motion-frame.mov beside the log, logging each frame's display
-//  time as "video frame <index>". The band is missionControlMotionBand points tall, 150 by default:
-//  down to the captions of a hover-expanded bar. Every 5 seconds a "video tally" line says how many
-//  frames the stream delivered, how many it marked idle (nothing new on screen), how many the encoder
-//  couldn't take, and the longest gap between new frames, so a run's analysis can tell how complete the
-//  film is. The hardware encodes it, but streaming the screen still loads the window server, so it is
-//  for measuring runs only.
+//  time as "video frame <index>". The band is missionControlMotionBand points tall, 150 by default
+//  (down to the captions of a hover-expanded bar), made even and kept within the display. Every 5
+//  seconds a "video tally" line says how many frames the stream delivered, how many it marked idle
+//  (nothing new on screen), how many the encoder couldn't take, and the longest gap between new frames,
+//  so a run's analysis can tell how complete the film is. The hardware encodes it, but streaming the
+//  screen still loads the window server, so it is for measuring runs only.
 //
 
 import AVFoundation
@@ -34,10 +36,12 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
         UserDefaults.standard.bool(forKey: "missionControlMotionVideo")
     }
 
-    /// How far down from the top of the display to film, in points.
-    private static var band: CGFloat {
-        let band = UserDefaults.standard.double(forKey: "missionControlMotionBand")
-        return band > 0 ? CGFloat(band) : 150
+    /// How far down from the top of the display to film, in points, for a `requested` band and a display
+    /// `displayHeight` points tall: 150 unless asked otherwise, to the nearest even number, as H.264 needs,
+    /// and no more than the display's height.
+    static func band(_ requested: Double, displayHeight: Int) -> Int {
+        let even = requested > 0 ? max(Int((requested / 2).rounded()) * 2, 2) : 150
+        return min(even, displayHeight / 2 * 2)
     }
 
     /// The folder the log and video go in.
@@ -74,7 +78,7 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
         stream = nil
         if let output { queue.async { output.finish() } }
         output = nil
-        note("recorder stopped")
+        if Self.isEnabled { note("recorder stopped") }
     }
 
     /// Leaves Spaceman's windows out of the film as they now are. Its label windows are made as
@@ -103,7 +107,7 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
         logQueue.async { self.write(Self.stamped(text, at: time)) }
     }
 
-    /// Writes where `labels` are as the frame reaching the screen at `frameTime` shows them. Any thread.
+    /// Writes where Spaceman placed `labels` for the frame reaching the screen at `frameTime`. Any thread.
     func noteDrawn(_ labels: [DrawnLabel], at frameTime: TimeInterval) {
         logQueue.async { self.write(Self.stamped(Self.drawnLine(labels), at: frameTime)) }
     }
@@ -157,11 +161,12 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
 
     /// Films the top of `display`, as `filter` shows it.
     private func startStream(filter: SCContentFilter, display: SCDisplay) async throws -> SCStream {
-        let band = Self.band
         let config = SCStreamConfiguration()
-        config.sourceRect = CGRect(x: 0, y: 0, width: CGFloat(display.width), height: band)
-        config.width = display.width
-        config.height = Int(band.rounded())
+        // H.264 takes only even dimensions.
+        config.width = display.width / 2 * 2
+        config.height = Self.band(
+            UserDefaults.standard.double(forKey: "missionControlMotionBand"), displayHeight: display.height)
+        config.sourceRect = CGRect(x: 0, y: 0, width: config.width, height: config.height)
         // Every frame the display shows.
         config.minimumFrameInterval = CMTime(value: 1, timescale: 120)
         config.queueDepth = 6

@@ -506,6 +506,7 @@ final class MissionControlLabels {
         clock.stop()
         reader.end()
         overlay.hide()
+        recordDrawn(at: ProcessInfo.processInfo.systemUptime)
         retraction = 1
         swipe.settle()
         logOutcome("Spaces Bar not found")
@@ -583,6 +584,7 @@ final class MissionControlLabels {
         switch placement(reading: reading, dock: dock, now: now, frameTime: frameTime) {
         case .hidden:
             overlay.hide()
+            recordDrawn(at: frameTime)
         case .gone:
             endTracking()
         case .slide(let timed):

@@ -128,8 +128,8 @@ final class MissionControlLabelOverlay {
             ?? "no window"
     }
 
-    /// For the debug recording: where each shown label is at `time` (system uptime), with the slides
-    /// and moves the window server animates worked out for that moment.
+    /// For the debug recording: where each shown label is placed for `time` (system uptime), with the
+    /// slides and moves handed to the window server worked out for that moment.
     func drawnLabels(at time: TimeInterval) -> [DrawnLabel] {
         windows.filter(\.isVisible).flatMap { $0.drawnLabels(at: time) }
     }
@@ -279,9 +279,10 @@ private final class OverlayWindow: NSWindow {
         return parts.joined(separator: " ") + ", \(layers.count - shown.count) hidden"
     }
 
-    /// Where each shown label is at `time`: its place, moved by the animations running then, as the
-    /// window server works them out. These follow the curves the animations' keyframes are taken from,
-    /// which are close enough together for the two to differ by well under a point.
+    /// Where each shown label is placed for `time`: its place, moved by the animations running then.
+    /// These follow the curves the animations' keyframes are taken from, which are close enough together
+    /// for the two to differ by well under a point. The window server may show a slide as it was a frame
+    /// earlier: see the header.
     func drawnLabels(at time: TimeInterval) -> [DrawnLabel] {
         let lift = runningSlide.map { $0.retraction(at: time) * runningSlideHeight } ?? slider.position.y
         let glide = runningShift?.offset(at: time) ?? slider.position.x

@@ -518,7 +518,7 @@ struct PreferencesView: View {
     }
 
     private var nativeLookUnavailableNote: some View {
-        noteText("The native look needs macOS 26. Labels use space colors on this version.")
+        noteText("The native look works only on macOS 26. Labels use space colors on this version.")
     }
 
     private func noteText(_ text: LocalizedStringKey) -> some View {

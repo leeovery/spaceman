@@ -18,8 +18,8 @@ extension MissionControlLabels {
         MissionControlMotionRecorder.shared.note(text(), at: time)
     }
 
-    /// Notes in the debug motion recording where each label is as the frame reaching the screen at
-    /// `frameTime` shows it, when it is on.
+    /// Notes in the debug motion recording, when it is on, where each label is placed for the frame
+    /// reaching the screen at `frameTime`; none, once they are hidden.
     func recordDrawn(at frameTime: TimeInterval) {
         guard MissionControlMotionRecorder.isEnabled else { return }
         MissionControlMotionRecorder.shared.noteDrawn(overlay.drawnLabels(at: frameTime), at: frameTime)

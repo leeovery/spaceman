@@ -459,10 +459,10 @@
         }
       }
     },
-    "The native look needs macOS 26. Labels use space colors on this version." : {
+    "The native look needs Screen Recording permission. Restart Spaceman after allowing it." : {
 
     },
-    "The native look needs Screen Recording permission. Restart Spaceman after allowing it." : {
+    "The native look works only on macOS 26. Labels use space colors on this version." : {
 
     },
     "Two Rows, by Columns" : {
