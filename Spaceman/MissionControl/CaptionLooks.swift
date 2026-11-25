@@ -53,8 +53,9 @@ struct CaptionLooks {
     }
 
     static let attemptLimit = 4
-    /// How long a caption waits for its look before its label is drawn in the fallback style, so names
-    /// show though no capture ever runs, as when a bar is never reported fully in.
+    /// How long, of the bars at rest, a caption waits for its look before its label is drawn in the
+    /// fallback style, so names show though no capture ever runs, as when a bar is never reported fully
+    /// in. Counted only at rest, so the fallback never switches in over captions on the move.
     static let lookWait: TimeInterval = 1.5
 
     private var exact: [String: NativeCaptionLook] = [:]
@@ -64,7 +65,10 @@ struct CaptionLooks {
     private var waiting: [String: NativeCaptionLook] = [:]
     /// This session's captions no look can arrive for, by `Keys.anyHeight`.
     private var spent: Set<String> = []
-    /// When this session first drew each caption without a look, by `Keys.anyHeight`.
+    /// How long the bars have rested this session, and since when they have been resting, if they are.
+    private var restTime: TimeInterval = 0
+    private var restingAt: TimeInterval?
+    /// `restTime` when this session first drew each caption without a look, by `Keys.anyHeight`.
     private var lookless: [String: TimeInterval] = [:]
     /// What each screen showed behind its captions when its looks were captured, by `Keys.screen`.
     private(set) var backgrounds: [String: String] = [:]
@@ -92,20 +96,28 @@ struct CaptionLooks {
         return byName[keys.name].map { ($0, false, true) }
     }
 
-    /// Whether a look may yet be captured, at `time`, for a caption that has none: not once a capture
-    /// has found none for it or given up, nor once it has waited `lookWait`.
-    mutating func lookMayArrive(for caption: Caption, on bar: BarLayout, at time: TimeInterval) -> Bool {
+    /// Whether a look may yet be captured for a caption that has none: not once a capture has found
+    /// none for it or given up, nor once it has waited `lookWait` of the bars at rest.
+    mutating func lookMayArrive(for caption: Caption, on bar: BarLayout) -> Bool {
         let key = Self.keys(bar: bar, caption: caption).anyHeight
         guard !spent.contains(key) else { return false }
-        let since = lookless[key] ?? time
+        let since = lookless[key] ?? restTime
         lookless[key] = since
-        return time - since < Self.lookWait
+        return restTime - since < Self.lookWait
+    }
+
+    /// Notes, each frame, whether the bars are at rest: fully in, with nothing moving them.
+    mutating func noteBars(resting: Bool, at time: TimeInterval) {
+        if resting, let since = restingAt { restTime += time - since }
+        restingAt = resting ? time : nil
     }
 
     /// Starts a session: every caption may get its look again.
     mutating func beginSession() {
         session += 1
         spent = []
+        restTime = 0
+        restingAt = nil
         lookless = [:]
     }
 
@@ -191,19 +203,22 @@ struct CaptionLooks {
 extension CaptionLooks {
 
     /// What each screen shows behind its captions, by `Keys.screen`: which display it is, at what size
-    /// and scale, the appearance and its wallpaper. A dynamic or shuffling wallpaper can change the
-    /// picture without changing these. On the main thread: it takes a few milliseconds, once a capture.
+    /// and scale, the appearance, accent colour and contrast settings, and its wallpaper. A dynamic or
+    /// shuffling wallpaper can change the picture without changing these. On the main thread: it takes
+    /// a few milliseconds, once a capture.
     static func currentBackgrounds() -> [String: String] {
-        let appearance = NSApp.effectiveAppearance.name.rawValue
-        let opaque = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        let workspace = NSWorkspace.shared
+        let appearance = "\(NSApp.effectiveAppearance.name.rawValue)|\(describe(NSColor.controlAccentColor))"
+            + "|\(workspace.accessibilityDisplayShouldReduceTransparency)"
+            + "|\(workspace.accessibilityDisplayShouldIncreaseContrast)"
         return Dictionary(NSScreen.screens.map { screen in
             let display = MissionControlLabels.displayUUID(of: screen) ?? "unknown"
             let size = screen.frame.size
-            let options = (NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:])
+            let options = (workspace.desktopImageOptions(for: screen) ?? [:])
                 .map { "\($0.key.rawValue)=\(describe($0.value))" }.sorted().joined(separator: ",")
-            let image = NSWorkspace.shared.desktopImageURL(for: screen)?.absoluteString ?? "none"
+            let image = workspace.desktopImageURL(for: screen)?.absoluteString ?? "none"
             return (screenKey(ScreenInfo.axFrame(of: screen)),
-                    "\(display)|\(size.width)x\(size.height)@\(screen.backingScaleFactor)|\(appearance)|\(opaque)"
+                    "\(display)|\(size.width)x\(size.height)@\(screen.backingScaleFactor)|\(appearance)"
                     + "|\(image)|\(options)")
         }) { first, _ in first }
     }

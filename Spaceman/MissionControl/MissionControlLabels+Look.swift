@@ -44,8 +44,8 @@ extension MissionControlLabels {
 
     /// Whether a look may yet be captured for a caption that has none. If so its native caption shows
     /// until then; if not, its label is drawn in the fallback style so the name still shows.
-    func lookMayArrive(for caption: Caption, on bar: BarLayout, nativeLook: Bool, at time: TimeInterval) -> Bool {
-        nativeLook && captureAccess && captionLooks.lookMayArrive(for: caption, on: bar, at: time)
+    func lookMayArrive(for caption: Caption, on bar: BarLayout, nativeLook: Bool) -> Bool {
+        nativeLook && captureAccess && captionLooks.lookMayArrive(for: caption, on: bar)
     }
 
     /// Identifies the bars' layout at rest, so a capture can wait for it to settle.
@@ -130,7 +130,10 @@ extension MissionControlLabels {
         capturedSignature = nil
         restingSince = ProcessInfo.processInfo.systemUptime
         if MissionControlCaptionLook.isDebugging {
-            Self.log.log("Capture \(outcome == .moved ? "dropped: the bars moved" : "to retry", privacy: .public)")
+            let why = outcome == .moved ? "the bars moved while it ran" : "a screen failed or a caption moved"
+            let next = capture.attempt < CaptionLooks.attemptLimit ? "capturing again after another rest"
+                : "no attempts left for these bars"
+            Self.log.log("Capture not all kept: \(why, privacy: .public); \(next, privacy: .public)")
         }
     }
 }

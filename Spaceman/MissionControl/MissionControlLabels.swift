@@ -529,8 +529,11 @@ final class MissionControlLabels {
         guard isTracking else { return }
         // A frame that doesn't find the bars fully in and still counts as motion for the capture.
         var resting = false
-        defer { if !resting { noteMotion() } }
         let now = ProcessInfo.processInfo.systemUptime
+        defer {
+            if !resting { noteMotion() }
+            captionLooks.noteBars(resting: resting, at: now)
+        }
         // Replayed slides are worked out for when this frame reaches the screen.
         let frameTime = max(clock.targetTime ?? now, now)
         if let running = shift, running.slide.isFinished(at: frameTime) { shift = nil }

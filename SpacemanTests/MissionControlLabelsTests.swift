@@ -415,15 +415,15 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(looks.finish(capture, result, moved: true), .moved)
         XCTAssertEqual(looks.backgrounds, [:])
         XCTAssertNil(looks.look(for: mail, on: mainBar))
-        XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar, at: 0))
+        XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar))
     }
 
     func testTheLastAttemptTheBarsMovedUnderSpendsEveryCaption() {
         var looks = CaptionLooks()
         let capture = looks.capture(of: [mainBar], attempt: CaptionLooks.attemptLimit)
         _ = looks.finish(capture, CaptionLooks.Result(), moved: true)
-        XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar, at: 0))
-        XCTAssertFalse(looks.lookMayArrive(for: code, on: mainBar, at: 0))
+        XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar))
+        XCTAssertFalse(looks.lookMayArrive(for: code, on: mainBar))
     }
 
     /// The draw looks a caption up on the bar as it is, perhaps still sliding in; the capture asked
@@ -433,9 +433,27 @@ final class MissionControlLabelsTests: XCTestCase {
         let capture = looks.capture(of: [bar(primary, retraction: 0.2, [mail, code])], attempt: 1)
         XCTAssertEqual(looks.finish(capture, CaptionLooks.Result(found: try found([mail], on: mainBar)), moved: false),
                        .kept)
-        XCTAssertFalse(looks.lookMayArrive(for: code, on: bar(primary, retraction: 0.7, [mail, code]), at: 0))
-        XCTAssertFalse(looks.lookMayArrive(for: code, on: bar(primary, height: 146, [mail, code]), at: 0))
-        XCTAssertTrue(looks.lookMayArrive(for: caption(3, "Docs"), on: mainBar, at: 0))
+        XCTAssertFalse(looks.lookMayArrive(for: code, on: bar(primary, retraction: 0.7, [mail, code])))
+        XCTAssertFalse(looks.lookMayArrive(for: code, on: bar(primary, height: 146, [mail, code])))
+        XCTAssertTrue(looks.lookMayArrive(for: caption(3, "Docs"), on: mainBar))
+    }
+
+    /// A capture taken as the bar began to slide away put the captions 9pt high.
+    func testACaptureMovingACaptionKeepsTheLookInUseUntilAnotherAgrees() throws {
+        var looks = CaptionLooks()
+        _ = looks.finish(looks.capture(of: [mainBar], attempt: 1),
+                         CaptionLooks.Result(found: try found([mail, code], on: mainBar)), moved: false)
+        let mailKey = CaptionLooks.keys(bar: mainBar, caption: mail).exact
+        let moved = CaptionLooks.Result(found: [mailKey: try look(top: -1.5)])
+        XCTAssertEqual(looks.finish(looks.capture(of: [bar(primary, [mail])], attempt: 2), moved, moved: false),
+                       .retry)
+        XCTAssertEqual(looks.look(for: mail, on: mainBar)?.look.plain?.top, 7.5)
+        XCTAssertEqual(looks.look(for: mail, on: bar(primary, height: 146, [mail]))?.look.plain?.top, 7.5)
+        XCTAssertEqual(looks.look(for: caption(3, "Mail"), on: mainBar)?.look.plain?.top, 7.5)
+        let agreeing = CaptionLooks.Result(found: [mailKey: try look(top: -1.25)])
+        XCTAssertEqual(looks.finish(looks.capture(of: [bar(primary, [mail])], attempt: 3), agreeing, moved: false),
+                       .kept)
+        XCTAssertEqual(looks.look(for: mail, on: mainBar)?.look.plain?.top, -1.25)
     }
 
     func testAScreenACaptureFailedOnIsAskedAboutAgain() throws {
@@ -445,7 +463,7 @@ final class MissionControlLabelsTests: XCTestCase {
             found: try found([mail, code], on: mainBar), failed: [builtInKey],
             backgrounds: [primaryKey: "hills", builtInKey: "sea"])
         XCTAssertEqual(looks.finish(capture, result, moved: false), .retry)
-        XCTAssertTrue(looks.lookMayArrive(for: caption(1, "Notes"), on: builtInBar, at: 0))
+        XCTAssertTrue(looks.lookMayArrive(for: caption(1, "Notes"), on: builtInBar))
         XCTAssertEqual(looks.backgrounds, [primaryKey: "hills"])
     }
 
@@ -453,7 +471,7 @@ final class MissionControlLabelsTests: XCTestCase {
         var looks = CaptionLooks()
         let capture = looks.capture(of: [builtInBar], attempt: CaptionLooks.attemptLimit)
         XCTAssertEqual(looks.finish(capture, CaptionLooks.Result(failed: [builtInKey]), moved: false), .kept)
-        XCTAssertFalse(looks.lookMayArrive(for: caption(1, "Notes"), on: builtInBar, at: 0))
+        XCTAssertFalse(looks.lookMayArrive(for: caption(1, "Notes"), on: builtInBar))
     }
 
     func testACaptureFromAnEarlierSessionIsIgnored() throws {
@@ -463,24 +481,45 @@ final class MissionControlLabelsTests: XCTestCase {
         let result = CaptionLooks.Result(found: try found([mail], on: mainBar), backgrounds: [primaryKey: "hills"])
         XCTAssertEqual(looks.finish(capture, result, moved: false), .stale)
         XCTAssertNil(looks.look(for: mail, on: mainBar))
-        XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar, at: 0))
+        XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar))
         XCTAssertEqual(looks.backgrounds, [:])
     }
 
     func testANewSessionWaitsForLooksAgain() {
         var looks = CaptionLooks()
         _ = looks.finish(looks.capture(of: [mainBar], attempt: 1), CaptionLooks.Result(), moved: false)
-        XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar, at: 0))
+        XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar))
         looks.beginSession()
-        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar, at: 10))
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
     }
 
-    func testACaptionWaitsForItsLookOnlySoLong() {
+    func testACaptionWaitsForItsLookOnlySoLongAtRest() {
         var looks = CaptionLooks()
-        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar, at: 5))
-        XCTAssertTrue(looks.lookMayArrive(for: mail, on: bar(primary, retraction: 0.5, [mail]), at: 6.4))
-        XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar, at: 5 + CaptionLooks.lookWait))
-        XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar, at: 6.6))
+        looks.noteBars(resting: true, at: 5)
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
+        looks.noteBars(resting: true, at: 6.25)
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
+        XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar))
+        looks.noteBars(resting: true, at: 5 + CaptionLooks.lookWait)
+        XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar))
+        XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar))
+    }
+
+    /// A swipe held part way, or Mission Control closing, moves the captions: the fallback must not
+    /// switch in over them as they go.
+    func testACaptionWaitsForItsLookOnlyWhileTheBarsRest() {
+        var looks = CaptionLooks()
+        looks.noteBars(resting: true, at: 0)
+        looks.noteBars(resting: true, at: 1)
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
+        looks.noteBars(resting: false, at: 1.1)
+        looks.noteBars(resting: false, at: 9)
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
+        looks.noteBars(resting: true, at: 10)
+        looks.noteBars(resting: true, at: 11.25)
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
+        looks.noteBars(resting: true, at: 11.5)
+        XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar))
     }
 
     // MARK: - Looks over another background
