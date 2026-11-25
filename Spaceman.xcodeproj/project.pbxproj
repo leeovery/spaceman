@@ -95,6 +95,7 @@
 		B28DC59C92BA38005333D9CB /* MissionControlLabels+Drag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22CF2A675BFAE0BD203B8691 /* MissionControlLabels+Drag.swift */; };
 		37D280E148DF8E983F1FB829 /* MissionControlLabels+Drawing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C520D7E38433849412C48B3 /* MissionControlLabels+Drawing.swift */; };
 		9BEA12E613EA55D6951213C5 /* MissionControlLabels+Look.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F9A38B686C3C3EDF936A570 /* MissionControlLabels+Look.swift */; };
+		4C1A7E2B9D3F5A6B8C0D1E2F /* CaptionLooks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D2B8F3CAE4061B7C9D2E3F4 /* CaptionLooks.swift */; };
 		4B732666D43547C66A26008A /* MissionControlLabels+Debug.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EFF9EE7FF138C6509C8005E /* MissionControlLabels+Debug.swift */; };
 		F046CEB2556D14059AF6FFB7 /* MissionControlLabels+Captions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C941C8409F531DFFC0DF5B4E /* MissionControlLabels+Captions.swift */; };
 		7D5B1286F0D5C8B42C8DD2CE /* BarLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59AA1E88399F639900B66B05 /* BarLayout.swift */; };
@@ -204,6 +205,7 @@
 		22CF2A675BFAE0BD203B8691 /* MissionControlLabels+Drag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MissionControlLabels+Drag.swift"; sourceTree = "<group>"; };
 		3C520D7E38433849412C48B3 /* MissionControlLabels+Drawing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MissionControlLabels+Drawing.swift"; sourceTree = "<group>"; };
 		9F9A38B686C3C3EDF936A570 /* MissionControlLabels+Look.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MissionControlLabels+Look.swift"; sourceTree = "<group>"; };
+		5D2B8F3CAE4061B7C9D2E3F4 /* CaptionLooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionLooks.swift; sourceTree = "<group>"; };
 		8EFF9EE7FF138C6509C8005E /* MissionControlLabels+Debug.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MissionControlLabels+Debug.swift"; sourceTree = "<group>"; };
 		C941C8409F531DFFC0DF5B4E /* MissionControlLabels+Captions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MissionControlLabels+Captions.swift"; sourceTree = "<group>"; };
 		59AA1E88399F639900B66B05 /* BarLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarLayout.swift; sourceTree = "<group>"; };
@@ -362,6 +364,7 @@
 				3C520D7E38433849412C48B3 /* MissionControlLabels+Drawing.swift */,
 				3DB295D8922006E3CB46B4FE /* MissionControlLabels+Events.swift */,
 				9F9A38B686C3C3EDF936A570 /* MissionControlLabels+Look.swift */,
+				5D2B8F3CAE4061B7C9D2E3F4 /* CaptionLooks.swift */,
 				E70AA6BF3098C3A600195354 /* MissionControlLabels.swift */,
 				8bef36859ae8795f0053c567 /* MissionControlMotionRecorder.swift */,
 				4554ee88260c5ff086782b46 /* MissionControlSwipeTracker.swift */,
@@ -647,6 +650,7 @@
 				B28DC59C92BA38005333D9CB /* MissionControlLabels+Drag.swift in Sources */,
 				37D280E148DF8E983F1FB829 /* MissionControlLabels+Drawing.swift in Sources */,
 				9BEA12E613EA55D6951213C5 /* MissionControlLabels+Look.swift in Sources */,
+				4C1A7E2B9D3F5A6B8C0D1E2F /* CaptionLooks.swift in Sources */,
 				4B732666D43547C66A26008A /* MissionControlLabels+Debug.swift in Sources */,
 				F046CEB2556D14059AF6FFB7 /* MissionControlLabels+Captions.swift in Sources */,
 				7D5B1286F0D5C8B42C8DD2CE /* BarLayout.swift in Sources */,

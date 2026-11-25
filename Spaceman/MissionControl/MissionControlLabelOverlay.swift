@@ -50,6 +50,8 @@ final class MissionControlLabelOverlay {
     static var labelHeight: CGFloat { LabelLayer.height }
 
     private var windows: [OverlayWindow] = []
+    /// Whether the label windows belong to every desktop: see `showOnEveryDesktop`.
+    private var onEveryDesktop = true
     private var lastRaise: TimeInterval = 0
     /// Mission Control can reorder its windows; keep the labels on top, at most this often.
     private static let raiseInterval: TimeInterval = 0.25
@@ -110,13 +112,8 @@ final class MissionControlLabelOverlay {
     /// desktop it opened on, or only to this one: macOS draws the windows of every desktop into the
     /// zoom to a desktop chosen in Mission Control.
     func showOnEveryDesktop(_ every: Bool) {
-        for window in windows {
-            if every {
-                window.collectionBehavior.insert(.canJoinAllSpaces)
-            } else {
-                window.collectionBehavior.remove(.canJoinAllSpaces)
-            }
-        }
+        onEveryDesktop = every
+        for window in windows { window.joinsEveryDesktop(every) }
     }
 
     /// For the debug recording: the labels shown on `screen`'s window.
@@ -138,6 +135,7 @@ final class MissionControlLabelOverlay {
     private func window(for screen: CGRect) -> OverlayWindow {
         if let existing = windows.first(where: { $0.axScreen == screen }) { return existing }
         let window = OverlayWindow(screen: screen)
+        window.joinsEveryDesktop(onEveryDesktop)
         windows.append(window)
         return window
     }
@@ -206,6 +204,14 @@ private final class OverlayWindow: NSWindow {
         root.addSublayer(nudgeLayer)
     }
 
+
+    func joinsEveryDesktop(_ every: Bool) {
+        if every {
+            collectionBehavior.insert(.canJoinAllSpaces)
+        } else {
+            collectionBehavior.remove(.canJoinAllSpaces)
+        }
+    }
 
     func show(
         _ labels: [MissionControlLabel], style: LabelLayer.Style, retraction: CGFloat, slide: TimedSlide?,

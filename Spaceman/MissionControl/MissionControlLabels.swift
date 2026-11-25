@@ -120,11 +120,7 @@ final class MissionControlLabels {
 
     // Native look: labels drawn to match the captions they cover, from a capture of the bar at rest.
     /// Looks by caption, kept across sessions so a label slides in matched from its first frame.
-    var looks: [String: NativeCaptionLook] = [:]
-    /// The same looks keyed without the bar's height, for a bar that has changed shape since.
-    var looksAnyHeight: [String: NativeCaptionLook] = [:]
-    /// The same looks by screen and name alone, for a caption that has moved to another thumbnail.
-    var looksByName: [String: NativeCaptionLook] = [:]
+    var captionLooks = CaptionLooks()
     /// The bars as last seen at rest, and since when, so a capture waits for them to settle.
     var restingSignature: String?
     var restingSince: TimeInterval = 0
@@ -134,16 +130,8 @@ final class MissionControlLabels {
     /// Counts frames that found the bars moving, or not fully in, so a capture can tell whether
     /// anything moved while it ran.
     var motionCount = 0
-    /// Captures that placed a caption away from its look in use, each waiting for another to agree.
-    var waitingLooks: [String: NativeCaptionLook] = [:]
     /// Captures this session by the bars' signature, so captures that never agree stop retrying.
     var captureAttempts: [String: Int] = [:]
-    /// Captions this session's captures have been spent on without a look, by `lookKeys(...).anyHeight`:
-    /// drawn in the fallback style rather than left showing for a look that won't come. A look captured
-    /// later still wins.
-    var spentLooks: Set<String> = []
-    /// What each screen showed behind its captions when its looks were captured, by `screenKey`.
-    var lookBackgrounds: [String: String] = [:]
     /// Whether Screen Recording is granted: macOS only changes the answer for a relaunched app.
     var captureAccess = false
     var requestedCaptureAccess = false
