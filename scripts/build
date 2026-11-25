@@ -1,0 +1,55 @@
+#!/bin/bash
+# Builds Spaceman at the project's version, signed with this Mac's Developer ID,
+# installs it to /Applications over the one there and starts it, replacing
+# the one running: scripts/bundle builds it, then press sign --dev signs it as
+# .press.toml says, with no timestamp, so it builds offline. The signature is
+# the same from build to build and release to release, so macOS keeps
+# Spaceman's permissions. It isn't notarised: a build installed from here is
+# never quarantined. `brew reinstall --cask spaceman` puts the release back.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+installed=/Applications/Spaceman.app
+identifier=com.leeovery.Spaceman
+
+# Built outside the repository, and gone once installed: a second signed copy
+# left about could be the one macOS launches by its bundle id.
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+version=$(sed -n 's/.*MARKETING_VERSION = \(.*\);/\1/p' Spaceman.xcodeproj/project.pbxproj | head -n 1)
+scripts/bundle "$work/out" "$version" "$work/temp"
+press sign --dev "$work/out"
+
+got=$(plutil -extract CFBundleIdentifier raw -o - "$work/out/Spaceman.app/Contents/Info.plist")
+if [[ $got != "$identifier" ]]; then
+  echo "The build is named $got, not $identifier: $installed left as it is." >&2
+  exit 1
+fi
+
+# Quit by a signal: asking by an Apple Event would itself need leave to
+# control Spaceman.
+if pkill -U "$UID" -x Spaceman; then
+  for _ in {1..50}; do
+    pgrep -U "$UID" -x Spaceman > /dev/null || break
+    sleep 0.1
+  done
+  if pgrep -U "$UID" -x Spaceman > /dev/null; then
+    echo "Spaceman is still running five seconds after it was stopped." >&2
+    exit 1
+  fi
+fi
+
+rm -rf "$installed"
+ditto "$work/out/Spaceman.app" "$installed"
+
+# An open straight after a bundle is moved in has failed with LaunchServices'
+# -600, so it is tried three times, a second apart.
+for try in 1 2 3; do
+  if open "$installed"; then
+    echo "Spaceman $version installed to $installed; brew reinstall --cask spaceman puts the release back"
+    exit 0
+  fi
+  [[ $try -eq 3 ]] || sleep 1
+done
+echo "macOS wouldn't open $installed, three times over." >&2
+exit 1

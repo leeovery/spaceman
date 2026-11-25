@@ -1,0 +1,37 @@
+# .mint.toml — mint configuration. This file is fully OPTIONAL: every default is
+# compiled into mint, so an empty file is valid and changes nothing. Add a key only
+# to set a value that differs from the default.
+#
+# Config reference (every key, level, and default): https://github.com/leeovery/mint
+# AI-assisted setup (inspects your project and proposes config): run `mint setup`
+
+[release]
+# The project's MARKETING_VERSION, in both configurations; CURRENT_PROJECT_VERSION
+# follows it. A release's build takes the version from press, not from here, as
+# pre_tag runs before mint writes it.
+version_file = 'Spaceman.xcodeproj/project.pbxproj'
+version_pattern = 'MARKETING_VERSION = {version};'
+# Tracked churn that isn't what Spaceman does: agent guidance, release tooling and
+# the tests, which would crowd the behaviour out of the notes.
+diff_exclude = [
+    'AGENTS.md',
+    'CLAUDE.md',
+    '.press.toml',
+    'SpacemanTests/**',
+    'scripts/**',
+]
+
+[release.hooks]
+# No CI runs the tests or builds a release, so both happen here, before the
+# irreversible tag and push. press check fails in seconds where the signing
+# keychain won't open or the notary login has lapsed. press prepare builds HEAD
+# in a worktree of its own, signs it with the Developer ID, notarises and staples
+# it, and keeps its zip, so a failure stops the release with nothing public yet.
+preflight = ['press check']
+pre_tag = [
+    'xcodebuild test -project Spaceman.xcodeproj -scheme Spaceman -destination platform=macOS -derivedDataPath DerivedData CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_STYLE=Manual',
+    'press prepare',
+]
+# Uploads the kept zip to the release and moves the cask on. A failure here only
+# warns; `press upload <version>` run again by hand finishes it.
+post_release = ['press upload']

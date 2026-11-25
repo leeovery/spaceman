@@ -3,7 +3,7 @@
 A macOS menu bar app that shows your Spaces, lets you name them, and puts those names on the Spaces Bar in
 Mission Control in place of "Desktop 1", "Desktop 2" and so on.
 
-This is a private fork of [ruittenb/Spaceman](https://github.com/ruittenb/Spaceman), reshaped for one Mac. It
+This is a personal fork of [ruittenb/Spaceman](https://github.com/ruittenb/Spaceman), reshaped for one Mac. It
 needs macOS 26 or later.
 
 ## What it does
@@ -16,6 +16,12 @@ needs macOS 26 or later.
   the labels work, and the approaches ruled out, is in [README-Mission-Control-Labels.md](README-Mission-Control-Labels.md).
 - **Switching.** Click a space in the menu or menu bar, or use the shortcuts, to switch smoothly, fast or
   instantly.
+
+## Installing
+
+```sh
+brew install --cask leeovery/tools/spaceman
+```
 
 ## Setup
 
@@ -47,7 +53,8 @@ number or name, optionally `on display` and `using`), `switch left/right/up/down
 
 ## Building
 
-Open `Spaceman.xcodeproj` in Xcode and run the Spaceman scheme, or run the tests from the command line:
+`scripts/build` builds Spaceman, signs it with the Developer ID that releases use, so macOS keeps its
+permissions from build to build, and replaces the running copy in `/Applications`. Run the tests with:
 
 ```sh
 xcodebuild test -project Spaceman.xcodeproj -scheme Spaceman -destination platform=macOS
@@ -55,6 +62,13 @@ xcodebuild test -project Spaceman.xcodeproj -scheme Spaceman -destination platfo
 
 The app uses private CoreGraphics and SkyLight calls, so it can't be sandboxed or shipped through the App
 Store.
+
+## Releasing
+
+`./release` cuts a release with [mint](https://github.com/leeovery/mint): it runs the tests, writes the
+notes, tags and pushes, and makes the GitHub release. Its hooks run press, which builds the app, signs it with
+the Developer ID, notarises it, uploads the zip to the release and moves the Homebrew cask on. The first
+release sets its version: `./release --set-version 2.0.0`.
 
 ## Credits
 

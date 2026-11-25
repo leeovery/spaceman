@@ -1,0 +1,21 @@
+# How press builds, signs and ships Spaceman: `press prepare` before mint tags
+# a release, `press upload` after (.mint.toml's hooks). scripts/build signs an
+# everyday build through it too, with press sign --dev.
+name = "spaceman"
+
+# Spaceman.app is the product: built by scripts/bundle, unsigned, then signed,
+# notarised and stapled. It sends Apple Events (System Events, to switch).
+[[app]]
+path = "Spaceman.app"
+identifier = "com.leeovery.Spaceman"
+entitlements = "Spaceman/Spaceman.entitlements"
+build = ["scripts/bundle {dir} {version} {temp}"]
+
+# The zip the cask downloads, holding the stapled app.
+[package]
+name = "Spaceman-{version}.zip"
+
+# The cask in leeovery/homebrew-tools, moved on to each release that is the
+# latest and no pre-release.
+[tap]
+kind = "cask"
