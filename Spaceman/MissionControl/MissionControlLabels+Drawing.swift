@@ -95,6 +95,7 @@ extension MissionControlLabels {
             }
         }
         overlay.render(labels, retraction: retraction, slide: slide, redrawing: drag != nil)
+        recordDrawn(at: frameTime)
         if MissionControlCaptionLook.isDebugging { trace(bars.first, labels: labels, retraction: retraction) }
         traceDrag(bars, labels: labels, at: frameTime)
     }

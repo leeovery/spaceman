@@ -801,4 +801,50 @@ final class MissionControlLabelsTests: XCTestCase {
         let time = timing.time(toReach: 0.5)
         XCTAssertEqual(timing.progress(at: time, from: 0), 0.5, accuracy: 0.001)
     }
+
+    // MARK: - Motion recording
+
+    func testDrawnLabelsAreLoggedByKeyAtTheirFrames() {
+        let labels = [
+            DrawnLabel(key: "12", frame: CGRect(x: 1180.5, y: -4, width: 76.5, height: 20)),
+            DrawnLabel(key: "7", frame: CGRect(x: 2600, y: 1023.04, width: 80, height: 22)),
+        ]
+        XCTAssertEqual(
+            MissionControlMotionRecorder.drawnLine(labels),
+            "ours 12@1180.5,-4.0,76.5,20.0 7@2600.0,1023.0,80.0,22.0")
+    }
+
+    func testAFrameWithNoLabelsIsStillLogged() {
+        XCTAssertEqual(MissionControlMotionRecorder.drawnLine([]), "ours")
+    }
+
+    func testTheTallyWaitsForItsInterval() {
+        var tally = FrameTally(interval: 5)
+        XCTAssertNil(tally.count(.complete(shown: 10, written: true), at: 10.01))
+        XCTAssertNil(tally.count(.idle, at: 14.9))
+    }
+
+    func testTheTallySumsUpEachInterval() {
+        var tally = FrameTally(interval: 5)
+        _ = tally.count(.complete(shown: 10, written: true), at: 10.01)
+        _ = tally.count(.complete(shown: 10.05, written: false), at: 10.07)
+        _ = tally.count(.idle, at: 12)
+        _ = tally.count(.other, at: 13)
+        XCTAssertEqual(
+            tally.count(.complete(shown: 15, written: true), at: 15.01),
+            "video tally 5.0s: 3 complete, 1 idle, 1 other, 1 unwritten, longest gap 4950.0ms, "
+                + "longest delay 20.0ms")
+    }
+
+    func testTheTallyStartsAfreshAfterEachSummaryButCarriesTheGapOn() {
+        var tally = FrameTally(interval: 5)
+        _ = tally.count(.complete(shown: 10, written: true), at: 10.01)
+        _ = tally.count(.idle, at: 15.01)
+        XCTAssertNil(tally.count(.complete(shown: 15.1, written: true), at: 15.11))
+        XCTAssertEqual(
+            tally.summary(at: 16),
+            "video tally 0.9s: 1 complete, 0 idle, 0 other, 0 unwritten, longest gap 5100.0ms, "
+                + "longest delay 10.0ms")
+        XCTAssertNil(tally.summary(at: 17))
+    }
 }

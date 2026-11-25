@@ -44,6 +44,12 @@ struct MissionControlLabel {
     var key = ""
 }
 
+/// Where a shown label is on screen at a moment, in AX coordinates, for the debug recording.
+struct DrawnLabel: Equatable {
+    let key: String
+    let frame: CGRect
+}
+
 final class MissionControlLabelOverlay {
 
     /// Height of one label, which the caption positions are worked out from.
@@ -122,6 +128,12 @@ final class MissionControlLabelOverlay {
             ?? "no window"
     }
 
+    /// For the debug recording: where each shown label is at `time` (system uptime), with the slides
+    /// and moves the window server animates worked out for that moment.
+    func drawnLabels(at time: TimeInterval) -> [DrawnLabel] {
+        windows.filter(\.isVisible).flatMap { $0.drawnLabels(at: time) }
+    }
+
     /// For the debug trace: each window's screen, and whether it is hidden, or shown and visible to
     /// macOS or covered.
     var debugState: String {
@@ -157,6 +169,8 @@ private final class OverlayWindow: NSWindow {
     private var redrawn = false
     /// The slides the slider is animating, if any.
     private var runningSlide: TimedSlide?
+    /// The bar height `runningSlide` moves the labels by.
+    private var runningSlideHeight: CGFloat = 0
     private var runningShift: TimedShift?
     /// Changed a little each frame while a slide runs, so the window server redraws the window.
     private let nudgeLayer = CALayer()
@@ -265,6 +279,23 @@ private final class OverlayWindow: NSWindow {
         return parts.joined(separator: " ") + ", \(layers.count - shown.count) hidden"
     }
 
+    /// Where each shown label is at `time`: its place, moved by the animations running then, as the
+    /// window server works them out. These follow the curves the animations' keyframes are taken from,
+    /// which are close enough together for the two to differ by well under a point.
+    func drawnLabels(at time: TimeInterval) -> [DrawnLabel] {
+        let lift = runningSlide.map { $0.retraction(at: time) * runningSlideHeight } ?? slider.position.y
+        let glide = runningShift?.offset(at: time) ?? slider.position.x
+        return layers.filter { !$0.isHidden }.map { layer in
+            let size = layer.bounds.size
+            let moved = layer.offset(at: time)
+            // Window-local y runs up from the strip's bottom; AX y runs down from the top.
+            let origin = CGPoint(
+                x: axScreen.minX + glide + layer.position.x + moved.dx,
+                y: axScreen.minY + frame.height - (lift + layer.position.y + size.height) + moved.dy)
+            return DrawnLabel(key: layer.key, frame: CGRect(origin: origin, size: size))
+        }
+    }
+
     private func nudge() {
         nudged.toggle()
         nudgeLayer.backgroundColor = NSColor(white: 1, alpha: nudged ? 2 / 255 : 1 / 255).cgColor
@@ -318,6 +349,7 @@ private final class OverlayWindow: NSWindow {
         guard slide != runningSlide else { return }
         slider.removeAnimation(forKey: Self.slideKey)
         runningSlide = slide
+        runningSlideHeight = barHeight
         let animation = CAKeyframeAnimation(keyPath: "position.y")
         animation.values = slide.keyframes(steps: Self.slideSteps).map { $0 * barHeight }
         animation.keyTimes = (0...Self.slideSteps).map { NSNumber(value: Double($0) / Double(Self.slideSteps)) }
@@ -455,6 +487,11 @@ private final class LabelLayer: CALayer {
         // A text layer draws its line from the top: this centres it in the box as the text field did.
         text.frame = CGRect(
             x: 0, y: Self.padding.height, width: width, height: Self.height - Self.padding.height * 2)
+    }
+
+    /// The offset its own move gives it at `time`, in AX directions (y down).
+    func offset(at time: TimeInterval) -> CGVector {
+        runningMove?.offset(at: time) ?? .zero
     }
 
     /// Animates the label from an offset to where it is placed, on top of where it is placed, so it
