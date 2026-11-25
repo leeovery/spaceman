@@ -16,7 +16,7 @@ extension MissionControlLabels {
     func draw(
         _ bars: [BarLayout], retraction: CGFloat, selected: [String?], slide: TimedSlide?, at frameTime: TimeInterval
     ) {
-        let matching = MissionControlCaptionLook.isEnabled
+        let matching = labelStyle == .nativeLook
         var labels: [MissionControlLabel] = []
         for (index, measured) in bars.enumerated() {
             let selectedTitle = index < selected.count ? selected[index] : nil
@@ -38,6 +38,8 @@ extension MissionControlLabels {
                 var centre = CGPoint(x: caption.centre.x, y: caption.centre.y + offset)
                 // Covered by the zoom to another desktop, as the Dock's caption is.
                 if let cover = zoomCover, zoom?.screen == bar.screen, cover.contains(centre) { continue }
+                let found = matching ? captionLooks.look(for: caption, on: bar) : nil
+                guard found != nil || !lookMayArrive(for: caption, on: bar) else { continue }
                 var dragged: TimedMove?
                 if let drag, drag.screen == bar.screen {
                     if caption.spaceID == drag.spaceID {
@@ -72,7 +74,6 @@ extension MissionControlLabels {
                         .earlier(by: clock.frameDuration / 2)
                     }
                 }
-                let found = matching ? look(for: caption, on: bar) : nil
                 let variant = found?.look.variant(current: selectedTitle.map { $0 == caption.covers }
                     ?? currentSpaceIDs.contains(caption.spaceID))
                 var label = Self.label(for: caption, centre: centre, screen: bar.screen, look: variant)
@@ -94,6 +95,7 @@ extension MissionControlLabels {
             }
         }
         overlay.render(labels, retraction: retraction, slide: slide, redrawing: drag != nil)
+        recordDrawn(at: frameTime)
         if MissionControlCaptionLook.isDebugging { trace(bars.first, labels: labels, retraction: retraction) }
         traceDrag(bars, labels: labels, at: frameTime)
     }

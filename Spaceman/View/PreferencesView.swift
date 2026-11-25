@@ -29,8 +29,8 @@ struct PreferencesView: View {
     @AppStorage("hudAlwaysTransparent") private var hudAlwaysTransparent = false
     @AppStorage("hudShowNumber") private var hudShowNumber = true
     @AppStorage("hudShowName") private var hudShowName = false
-    @AppStorage("showMissionControlLabels") private var showMissionControlLabels = false
-    @AppStorage("areMissionControlLabelsColored") private var areMissionControlLabelsColored = true
+    @AppStorage(MissionControlLabelStyle.namesShownKey) private var showMissionControlLabels = false
+    @AppStorage(MissionControlLabelStyle.defaultsKey) private var labelStyle = MissionControlLabelStyle.nativeLook
 
     @AppStorage("visibleSpacesMode") private var visibleSpacesMode = VisibleSpacesMode.all
     @AppStorage("neighborRadius") private var neighborRadius = 1
@@ -228,6 +228,7 @@ struct PreferencesView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(verbatim: "© 2020-2023 Sasindu Jayasinghe")
                     Text(verbatim: "© 2024-2026 René Uittenbogaard")
+                    Text(verbatim: "© 2026 Lee Overy")
                 }
                 .font(.subheadline)
                 .foregroundColor(.secondary)
@@ -464,12 +465,76 @@ struct PreferencesView: View {
                 .fontWeight(.semibold)
                 .padding(.top, 4)
             Toggle("Show space names in Mission Control", isOn: $showMissionControlLabels)
-            Toggle("Use color", isOn: $areMissionControlLabelsColored)
+                .onChange(of: showMissionControlLabels) {
+                    requestScreenRecordingIfNeeded()
+                }
+            labelStylePicker
                 .padding(.leading, subItemIndent)
                 .disabled(!showMissionControlLabels)
+            if nativeLookIsUnavailable {
+                nativeLookUnavailableNote
+                    .padding(.leading, subItemIndent)
+            } else if needsScreenRecording {
+                screenRecordingNote
+                    .padding(.leading, subItemIndent)
+            }
         }
         .padding([.top, .bottom, .trailing])
         .padding(.leading, 16)
+    }
+
+    // MARK: - Mission Control Label Style
+    private var labelStylePicker: some View {
+        HStack(spacing: 12) {
+            Text("Label style")
+            Spacer()
+            Picker("", selection: $labelStyle) {
+                Text("Native look").tag(MissionControlLabelStyle.nativeLook)
+                Text("Space colors").tag(MissionControlLabelStyle.spaceColors)
+            }
+            .fixedSize()
+        }
+        .onChange(of: labelStyle) {
+            requestScreenRecordingIfNeeded()
+        }
+    }
+
+    /// macOS reports a new Screen Recording grant only to a relaunched app: until then the labels are drawn
+    /// in the spaces' colors, and this says why.
+    private var needsScreenRecording: Bool {
+        MissionControlLabelStyle.needsScreenRecording(
+            namesShown: showMissionControlLabels, chosen: labelStyle,
+            nativeLookAvailable: MissionControlLabelStyle.nativeLookIsAvailable,
+            screenRecordingGranted: CGPreflightScreenCaptureAccess())
+    }
+
+    /// macOS 27 moved the Spaces Bar out of the Dock, where the native look captures it.
+    private var nativeLookIsUnavailable: Bool {
+        showMissionControlLabels && labelStyle == .nativeLook && !MissionControlLabelStyle.nativeLookIsAvailable
+    }
+
+    private func requestScreenRecordingIfNeeded() {
+        if needsScreenRecording { CGRequestScreenCaptureAccess() }
+    }
+
+    private var nativeLookUnavailableNote: some View {
+        noteText("The native look works only on macOS 26. Labels use space colors on this version.")
+    }
+
+    private func noteText(_ text: LocalizedStringKey) -> some View {
+        Text(text)
+            .font(.callout)
+            .foregroundColor(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var screenRecordingNote: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            noteText("The native look needs Screen Recording permission. Restart Spaceman after allowing it.")
+            Button("Open System Settings → Screen Recording…") {
+                openScreenRecordingSettings()
+            }
+        }
     }
 
     // MARK: - Refresh Shortcut Recorder
@@ -845,6 +910,14 @@ func openMissionControlShortcuts() {
         // File-path fallbacks
         "/System/Library/PreferencePanes/Keyboard.prefPane",
         "/System/Library/PreferencePanes/Expose.prefPane"
+    ])
+}
+
+// MARK: - Open Screen Recording Settings
+/// Opens Privacy & Security → Screen Recording.
+func openScreenRecordingSettings() {
+    openSettings(candidates: [
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture"
     ])
 }
 

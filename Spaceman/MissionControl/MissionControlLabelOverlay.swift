@@ -23,8 +23,8 @@ import AppKit
 
 /// A name label to draw, centred on `centre` on the screen whose frame is `screen`. Both are in
 /// AX coordinates: origin at the top-left of the primary display, y down. With a `look`, the label
-/// is drawn to match the native caption it covers, with its top-left at `lookOrigin`; without one,
-/// as a dark box.
+/// is drawn to match the native caption it covers, with its top-left at `lookOrigin`; otherwise as a
+/// box in its space's colour, or black for a space without one.
 struct MissionControlLabel {
     let name: String
     let covers: String
@@ -44,12 +44,20 @@ struct MissionControlLabel {
     var key = ""
 }
 
+/// Where a shown label is on screen at a moment, in AX coordinates, for the debug recording.
+struct DrawnLabel: Equatable {
+    let key: String
+    let frame: CGRect
+}
+
 final class MissionControlLabelOverlay {
 
     /// Height of one label, which the caption positions are worked out from.
     static var labelHeight: CGFloat { LabelLayer.height }
 
     private var windows: [OverlayWindow] = []
+    /// Whether the label windows belong to every desktop: see `showOnEveryDesktop`.
+    private var onEveryDesktop = true
     private var lastRaise: TimeInterval = 0
     /// Mission Control can reorder its windows; keep the labels on top, at most this often.
     private static let raiseInterval: TimeInterval = 0.25
@@ -110,19 +118,20 @@ final class MissionControlLabelOverlay {
     /// desktop it opened on, or only to this one: macOS draws the windows of every desktop into the
     /// zoom to a desktop chosen in Mission Control.
     func showOnEveryDesktop(_ every: Bool) {
-        for window in windows {
-            if every {
-                window.collectionBehavior.insert(.canJoinAllSpaces)
-            } else {
-                window.collectionBehavior.remove(.canJoinAllSpaces)
-            }
-        }
+        onEveryDesktop = every
+        for window in windows { window.joinsEveryDesktop(every) }
     }
 
     /// For the debug recording: the labels shown on `screen`'s window.
     func layerState(for screen: CGRect) -> String {
         windows.first { $0.axScreen == screen }.map { "\($0.isVisible ? "shown" : "hidden") window: \($0.layerState)" }
             ?? "no window"
+    }
+
+    /// For the debug recording: where each shown label is placed for `time` (system uptime), with the
+    /// slides and moves handed to the window server worked out for that moment.
+    func drawnLabels(at time: TimeInterval) -> [DrawnLabel] {
+        windows.filter(\.isVisible).flatMap { $0.drawnLabels(at: time) }
     }
 
     /// For the debug trace: each window's screen, and whether it is hidden, or shown and visible to
@@ -138,6 +147,7 @@ final class MissionControlLabelOverlay {
     private func window(for screen: CGRect) -> OverlayWindow {
         if let existing = windows.first(where: { $0.axScreen == screen }) { return existing }
         let window = OverlayWindow(screen: screen)
+        window.joinsEveryDesktop(onEveryDesktop)
         windows.append(window)
         return window
     }
@@ -159,6 +169,8 @@ private final class OverlayWindow: NSWindow {
     private var redrawn = false
     /// The slides the slider is animating, if any.
     private var runningSlide: TimedSlide?
+    /// The bar height `runningSlide` moves the labels by.
+    private var runningSlideHeight: CGFloat = 0
     private var runningShift: TimedShift?
     /// Changed a little each frame while a slide runs, so the window server redraws the window.
     private let nudgeLayer = CALayer()
@@ -207,6 +219,14 @@ private final class OverlayWindow: NSWindow {
     }
 
 
+    func joinsEveryDesktop(_ every: Bool) {
+        if every {
+            collectionBehavior.insert(.canJoinAllSpaces)
+        } else {
+            collectionBehavior.remove(.canJoinAllSpaces)
+        }
+    }
+
     func show(
         _ labels: [MissionControlLabel], style: LabelLayer.Style, retraction: CGFloat, slide: TimedSlide?,
         redrawing: Bool
@@ -228,7 +248,7 @@ private final class OverlayWindow: NSWindow {
             layer.key = label.key
             layer.configure(label, style: style, scale: scale)
             let size = layer.bounds.size
-            // The label's top-left in AX coordinates: a matched look is placed for it; a dark box is centred.
+            // The label's top-left in AX coordinates: a matched look is placed for it; a box is centred.
             let topLeft = label.lookOrigin
                 ?? CGPoint(x: label.centre.x - size.width / 2, y: label.centre.y - size.height / 2)
             // Window-local coordinates, with y up from the strip's bottom, on whole device pixels.
@@ -257,6 +277,24 @@ private final class OverlayWindow: NSWindow {
             return "\(layer.key)@\(Int(layer.position.x.rounded()))/\(Int(onScreen.rounded()))"
         }
         return parts.joined(separator: " ") + ", \(layers.count - shown.count) hidden"
+    }
+
+    /// Where each shown label is placed for `time`: its place, moved by the animations running then.
+    /// These follow the curves the animations' keyframes are taken from, which are close enough together
+    /// for the two to differ by well under a point. The window server may show a slide as it was a frame
+    /// earlier: see the header.
+    func drawnLabels(at time: TimeInterval) -> [DrawnLabel] {
+        let lift = runningSlide.map { $0.retraction(at: time) * runningSlideHeight } ?? slider.position.y
+        let glide = runningShift?.offset(at: time) ?? slider.position.x
+        return layers.filter { !$0.isHidden }.map { layer in
+            let size = layer.bounds.size
+            let moved = layer.offset(at: time)
+            // Window-local y runs up from the strip's bottom; AX y runs down from the top.
+            let origin = CGPoint(
+                x: axScreen.minX + glide + layer.position.x + moved.dx,
+                y: axScreen.minY + frame.height - (lift + layer.position.y + size.height) + moved.dy)
+            return DrawnLabel(key: layer.key, frame: CGRect(origin: origin, size: size))
+        }
     }
 
     private func nudge() {
@@ -312,6 +350,7 @@ private final class OverlayWindow: NSWindow {
         guard slide != runningSlide else { return }
         slider.removeAnimation(forKey: Self.slideKey)
         runningSlide = slide
+        runningSlideHeight = barHeight
         let animation = CAKeyframeAnimation(keyPath: "position.y")
         animation.values = slide.keyframes(steps: Self.slideSteps).map { $0 * barHeight }
         animation.keyTimes = (0...Self.slideSteps).map { NSNumber(value: Double($0) / Double(Self.slideSteps)) }
@@ -329,18 +368,15 @@ private final class OverlayWindow: NSWindow {
 
 // MARK: - LabelLayer
 
-/// One name label, covering a "Desktop N" caption: the matched look's image, or a dark box with
-/// the name.
+/// One name label, covering a "Desktop N" caption: the matched look's image, or a box with the
+/// name in its space's colour.
 private final class LabelLayer: CALayer {
 
     struct Style: Equatable {
-        let useColor: Bool
         let decoration: Int
 
         static var current: Style {
-            Style(
-                useColor: UserDefaults.standard.bool(forKey: "areMissionControlLabelsColored"),
-                decoration: UserDefaults.standard.integer(forKey: "decorationActive"))
+            Style(decoration: UserDefaults.standard.integer(forKey: "decorationActive"))
         }
     }
 
@@ -433,7 +469,7 @@ private final class LabelLayer: CALayer {
         content = wanted
 
         text.string = label.name
-        if style.useColor, let hex = label.colorHex, let color = NSColor.fromHex(hex) {
+        if let hex = label.colorHex, let color = NSColor.fromHex(hex) {
             backgroundColor = color.cgColor
             text.foregroundColor = color.contrastingTextColor.cgColor
         } else {
@@ -452,6 +488,11 @@ private final class LabelLayer: CALayer {
         // A text layer draws its line from the top: this centres it in the box as the text field did.
         text.frame = CGRect(
             x: 0, y: Self.padding.height, width: width, height: Self.height - Self.padding.height * 2)
+    }
+
+    /// The offset its own move gives it at `time`, in AX directions (y down).
+    func offset(at time: TimeInterval) -> CGVector {
+        runningMove?.offset(at: time) ?? .zero
     }
 
     /// Animates the label from an offset to where it is placed, on top of where it is placed, so it

@@ -8,11 +8,11 @@ Spaceman is a macOS menu bar application that displays Spaces/Virtual Desktops. 
 
 ## Build Commands
 
-**Never build the app.** Do not run `make`, `xcodebuild`, or any other build commands. The user will build manually. Tell them to.
+**Never build or install the app, and never release.** Running the tests (below) is fine. Test builds go through `scripts/build`, which builds Release, signs it with the Developer ID through `press sign --dev`, and replaces the running `/Applications/Spaceman.app`: that is the owner's call, so tell them to run it.
 
-## Build Artifacts
+## Releasing
 
-The `build/` directory contains `*.dmg` release artifacts for every version. These MUST NOT be deleted — they are the distribution archives.
+The owner releases with `./release`: mint tags the release, writes its notes and makes the GitHub release, and its hooks run press (`.mint.toml`, `.press.toml`). Agents never run `./release`, `mint release`, `press prepare` or `press upload`. Release builds come from `scripts/bundle`, an unsigned universal Release build that press signs. The version lives in the project's `MARKETING_VERSION`, which mint writes; `CURRENT_PROJECT_VERSION` follows it.
 
 ## macOS Integration
 
@@ -20,7 +20,7 @@ The app uses **private** Core Graphics APIs (`CGSCopyManagedDisplaySpaces`, `_CG
 
 ## Code Signing
 
-This project does not have a developer certificate, so no code signing or notarization takes place.
+Releases are signed with the owner's Developer ID, with the hardened runtime, then notarised and stapled, all by press. `Spaceman/Spaceman.entitlements` holds the app's only entitlement, `com.apple.security.automation.apple-events`, for switching through System Events; press checks the signed app carries exactly that file's entitlements, so a new entitlement goes in that file.
 
 ## Testing
 

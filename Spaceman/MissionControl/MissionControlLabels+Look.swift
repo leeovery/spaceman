@@ -12,42 +12,39 @@ extension MissionControlLabels {
 
     /// Asks, once per launch, for the Screen Recording permission the native look needs.
     func requestCaptureAccessIfNeeded() {
-        guard MissionControlCaptionLook.isEnabled, Self.spacesBarIsInDock, !requestedCaptureAccess else { return }
+        guard !requestedCaptureAccess, MissionControlLabelStyle.needsScreenRecordingNow() else { return }
         requestedCaptureAccess = true
-        if !CGPreflightScreenCaptureAccess() {
-            Self.log.log("Asking for Screen Recording, to match Mission Control's captions")
-            CGRequestScreenCaptureAccess()
-        }
+        Self.log.log("Asking for Screen Recording, to match Mission Control's captions")
+        CGRequestScreenCaptureAccess()
+    }
+
+    /// Readies the native look for a session: the style is decided afresh, captures start afresh, and
+    /// looks captured over another background are dropped, so the native captions show until they are
+    /// captured again.
+    func beginLookSession() {
+        labelStyle = MissionControlLabelStyle.current()
+        restingSignature = nil
+        capturedSignature = nil
+        captureAttempts = [:]
+        // A capture from the last session may still be running: it is ignored when it lands.
+        isCapturing = false
+        captionLooks.beginSession()
+        guard labelStyle == .nativeLook else { return }
+        let dropped = captionLooks.dropLooks(capturedOver: CaptionLooks.currentBackgrounds())
+        if dropped > 0 { Self.log.log("Dropped looks captured over another background on \(dropped) screens") }
     }
 
     /// How long the bars must rest, fully in and unchanged, before they are captured. The Dock reports
     /// where its timed animations end as they start, and they run up to about 0.27s (opening,
     /// thumbnails growing under the pointer), so a bar it reports at rest can still be moving.
     private static let captureSettle: TimeInterval = 0.3
-    private static let captureAttemptLimit = 4
 
-    /// A look for a caption: captured for it exactly, or borrowed from the bar at this height or another.
-    typealias FoundLook = (look: NativeCaptionLook, exact: Bool, sameHeight: Bool)
+    typealias FoundLook = CaptionLooks.Found
 
-    func look(for caption: Caption, on bar: BarLayout) -> FoundLook? {
-        let keys = Self.lookKeys(bar: bar, caption: caption)
-        if let look = looks[keys.exact] { return (look, true, true) }
-        if let look = looksAnyHeight[keys.anyHeight] { return (look, false, false) }
-        // Moved to another thumbnail, as when a desktop comes, goes or is dragged: until a capture
-        // of it there, the look it had elsewhere.
-        return looksByName[Self.nameKey(bar: bar, caption: caption)].map { ($0, false, true) }
-    }
-
-    /// A look by screen, name and bar height, whatever caption it covers.
-    private static func nameKey(bar: BarLayout, caption: Caption) -> String {
-        "\(bar.screen.minX),\(bar.screen.minY)|\(caption.name)|\(Int(bar.frame.height.rounded()))"
-    }
-
-    /// A caption's look belongs to its screen, the text it covers and the name over it, and to the
-    /// bar's height: hover-expanded thumbnails put the captions over a different part of the bar.
-    static func lookKeys(bar: BarLayout, caption: Caption) -> (exact: String, anyHeight: String) {
-        let anyHeight = "\(bar.screen.minX),\(bar.screen.minY)|\(caption.covers)|\(caption.name)"
-        return ("\(anyHeight)|\(Int(bar.frame.height.rounded()))", anyHeight)
+    /// Whether a look may yet be captured for a caption that has none. If so its native caption shows
+    /// until then; if not, its label is drawn in the fallback style so the name still shows.
+    func lookMayArrive(for caption: Caption, on bar: BarLayout) -> Bool {
+        labelStyle == .nativeLook && captionLooks.lookMayArrive(for: caption, on: bar)
     }
 
     /// Identifies the bars' layout at rest, so a capture can wait for it to settle.
@@ -70,7 +67,7 @@ extension MissionControlLabels {
     /// native captions: each session, and again when they change, as when hovering expands the
     /// thumbnails.
     func captureIfSettled(_ bars: [BarLayout], now: TimeInterval) {
-        guard MissionControlCaptionLook.isEnabled else { return }
+        guard labelStyle == .nativeLook else { return }
         // Captions measured mid-slide sit off their resting places: wait for a measurement at rest.
         guard bars.allSatisfy({ abs($0.frame.minY - $0.screen.minY) < 0.5 }) else {
             noteMotion()
@@ -84,68 +81,57 @@ extension MissionControlLabels {
             return
         }
         let attempts = captureAttempts[signature, default: 0]
-        guard !isCapturing, signature != capturedSignature, attempts < Self.captureAttemptLimit,
+        guard !isCapturing, signature != capturedSignature, attempts < CaptionLooks.attemptLimit,
               now - restingSince >= Self.captureSettle
         else { return }
-        guard CGPreflightScreenCaptureAccess() else { return }
         capturedSignature = signature
         captureAttempts[signature] = attempts + 1
         isCapturing = true
         let motion = motionCount
+        let capture = captionLooks.capture(of: bars, attempt: attempts + 1)
+        let captured = Set(bars.map { CaptionLooks.screenKey($0.screen) })
+        let backgrounds = CaptionLooks.currentBackgrounds().filter { captured.contains($0.key) }
         let jobs = bars.map { bar in
             let rest = bar.atRest()
             return (displayID: rest.displayID, screen: rest.screen, captions: rest.captions.map { caption in
                 CaptionToMatch(
-                    key: Self.lookKeys(bar: rest, caption: caption).exact, centre: caption.centre,
+                    key: CaptionLooks.keys(bar: rest, caption: caption).exact, centre: caption.centre,
                     barTop: rest.frame.minY, barBottom: rest.frame.maxY, maxWidth: caption.maxWidth,
                     covers: caption.covers, name: caption.name)
             })
         }
         let owner = WeakOwner(self)
         Task.detached(priority: .userInitiated) {
-            var found: [String: NativeCaptionLook] = [:]
+            var result = CaptionLooks.Result(backgrounds: backgrounds)
             for job in jobs {
-                let looks = await MissionControlCaptionLook.capture(
+                guard let looks = await MissionControlCaptionLook.capture(
                     displayID: job.displayID, screen: job.screen, captions: job.captions)
-                found.merge(looks ?? [:]) { $1 }
+                else {
+                    result.failed.insert(CaptionLooks.screenKey(job.screen))
+                    continue
+                }
+                result.found.merge(looks) { $1 }
             }
             DispatchQueue.main.async {
-                owner.labels?.finishCapture(found, motion: motion)
+                owner.labels?.finishCapture(capture, result, motion: motion)
             }
         }
     }
 
-    /// Keeps a capture's looks, unless the bars moved while it ran. A look that moves a caption waits
-    /// for another capture to agree, and the bars are captured again after another rest to see.
-    fileprivate func finishCapture(_ found: [String: NativeCaptionLook], motion: Int) {
+    /// Keeps a capture's looks, unless it is from an earlier session or the bars moved while it ran. The
+    /// bars are captured again after another rest when it moved or failed to capture a caption.
+    fileprivate func finishCapture(_ capture: CaptionLooks.Capture, _ result: CaptionLooks.Result, motion: Int) {
+        let outcome = captionLooks.finish(capture, result, moved: motion != motionCount)
+        guard outcome != .stale else { return }
         isCapturing = false
-        guard motion == motionCount else {
-            capturedSignature = nil
-            if MissionControlCaptionLook.isDebugging { Self.log.log("Capture dropped: the bars moved while it ran") }
-            return
-        }
-        var disputed: [String] = []
-        for (key, captured) in found {
-            let settled = NativeCaptionLook.settle(captured: captured, held: looks[key], waiting: waitingLooks[key])
-            waitingLooks[key] = settled.waiting
-            guard let use = settled.use else {
-                disputed.append(key)
-                continue
-            }
-            looks[key] = use
-            if let separator = key.lastIndex(of: "|") {
-                looksAnyHeight[String(key[..<separator])] = use
-            }
-            let parts = key.split(separator: "|", omittingEmptySubsequences: false)
-            if parts.count >= 4 {
-                looksByName["\(parts[0])|\(parts[parts.count - 2])|\(parts[parts.count - 1])"] = use
-            }
-        }
-        guard !disputed.isEmpty else { return }
+        guard outcome != .kept else { return }
         capturedSignature = nil
         restingSince = ProcessInfo.processInfo.systemUptime
         if MissionControlCaptionLook.isDebugging {
-            Self.log.log("Capture moved \(disputed.count) captions; waiting for another to agree")
+            let why = outcome == .moved ? "the bars moved while it ran" : "a screen failed or a caption moved"
+            let next = capture.attempt < CaptionLooks.attemptLimit ? "capturing again after another rest"
+                : "no attempts left for these bars"
+            Self.log.log("Capture not all kept: \(why, privacy: .public); \(next, privacy: .public)")
         }
     }
 }

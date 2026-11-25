@@ -3,7 +3,7 @@
 A macOS menu bar app that shows your Spaces, lets you name them, and puts those names on the Spaces Bar in
 Mission Control in place of "Desktop 1", "Desktop 2" and so on.
 
-This is a private fork of [ruittenb/Spaceman](https://github.com/ruittenb/Spaceman), reshaped for one Mac. It
+This is a personal fork of [ruittenb/Spaceman](https://github.com/ruittenb/Spaceman), reshaped for one Mac. It
 needs macOS 26 or later.
 
 ## What it does
@@ -11,11 +11,18 @@ needs macOS 26 or later.
 - **Menu bar icon.** One box per space, showing its number or name, with the current space marked.
 - **Names and colours.** Name and colour each space in Preferences → Spaces, or rename the current one with a
   shortcut. The names survive reboots, reordering in Mission Control, and displays coming and going.
-- **Mission Control labels.** Each thumbnail on the Spaces Bar shows its space's name, drawn to match the
-  native caption and following the bar as it opens, closes, expands on hover and reorders under a drag. How
+- **Mission Control labels.** Each thumbnail on the Spaces Bar shows its space's name. On macOS 26 the labels
+  can be drawn to match the native caption, and follow the bar as it opens, closes, expands on hover and
+  reorders under a drag. On macOS 27 they show in space colours and don't yet follow the bar's motion. How
   the labels work, and the approaches ruled out, is in [README-Mission-Control-Labels.md](README-Mission-Control-Labels.md).
 - **Switching.** Click a space in the menu or menu bar, or use the shortcuts, to switch smoothly, fast or
   instantly.
+
+## Installing
+
+```sh
+brew install --cask leeovery/tools/spaceman
+```
 
 ## Setup
 
@@ -23,7 +30,8 @@ Spaceman needs these, all in System Settings → Privacy & Security:
 
 1. **Accessibility** (Device Control and Data Access on macOS 27): for switching spaces and reading the Spaces
    Bar.
-2. **Screen & System Audio Recording:** for drawing the labels to match the native captions.
+2. **Screen & System Audio Recording** (macOS 26 only, with the Native look label style): for drawing the
+   labels to match the native captions.
 3. **Automation:** for switching spaces through System Events.
 
 Switching to a space by number also needs its shortcut turned on in System Settings → Keyboard → Keyboard
@@ -47,7 +55,8 @@ number or name, optionally `on display` and `using`), `switch left/right/up/down
 
 ## Building
 
-Open `Spaceman.xcodeproj` in Xcode and run the Spaceman scheme, or run the tests from the command line:
+`scripts/build` builds Spaceman, signs it with the Developer ID that releases use, so macOS keeps its
+permissions from build to build, and replaces the running copy in `/Applications`. Run the tests with:
 
 ```sh
 xcodebuild test -project Spaceman.xcodeproj -scheme Spaceman -destination platform=macOS
@@ -55,6 +64,13 @@ xcodebuild test -project Spaceman.xcodeproj -scheme Spaceman -destination platfo
 
 The app uses private CoreGraphics and SkyLight calls, so it can't be sandboxed or shipped through the App
 Store.
+
+## Releasing
+
+`./release` cuts a release with [mint](https://github.com/leeovery/mint): it runs the tests, writes the
+notes, tags and pushes, and makes the GitHub release. Its hooks run press, which builds the app, signs it with
+the Developer ID, notarises it, uploads the zip to the release and moves the Homebrew cask on. The first
+release sets its version: `./release --set-version 2.0.0`.
 
 ## Credits
 

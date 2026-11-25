@@ -351,6 +351,230 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(settled.waiting?.plain?.top, 3)
     }
 
+    // MARK: - Caption looks
+
+    private func caption(_ number: Int, _ name: String) -> Caption {
+        Caption(
+            centre: CGPoint(x: CGFloat(number) * 200, y: 30), maxWidth: 180, covers: "Desktop \(number)", name: name,
+            colorHex: nil, spaceID: "\(number)")
+    }
+
+    /// A bar on `screen`, `retraction` of its height above its place at rest.
+    private func bar(_ screen: CGRect, height: CGFloat = 40, retraction: CGFloat = 0, _ captions: [Caption])
+        -> BarLayout {
+        let lift = retraction * height
+        return BarLayout(
+            bar: nil, firstButton: nil,
+            frame: CGRect(x: screen.minX, y: screen.minY - lift, width: screen.width, height: height),
+            firstButtonX: nil, screen: screen, displayID: 1,
+            captions: captions.map {
+                Caption(centre: CGPoint(x: $0.centre.x, y: $0.centre.y - lift), maxWidth: $0.maxWidth,
+                        covers: $0.covers, name: $0.name, colorHex: nil, spaceID: $0.spaceID)
+            })
+    }
+
+    private var mail: Caption { caption(1, "Mail") }
+    private var code: Caption { caption(2, "Code") }
+    private var mainBar: BarLayout { bar(primary, [mail, code]) }
+    private var builtInBar: BarLayout { bar(builtIn, height: 72, [caption(1, "Notes")]) }
+    private var primaryKey: String { CaptionLooks.screenKey(primary) }
+    private var builtInKey: String { CaptionLooks.screenKey(builtIn) }
+
+    private func found(_ captions: [Caption], on bar: BarLayout) throws -> [String: NativeCaptionLook] {
+        var found: [String: NativeCaptionLook] = [:]
+        for caption in captions { found[CaptionLooks.keys(bar: bar, caption: caption).exact] = try look(top: 7.5) }
+        return found
+    }
+
+    func testAKeptCaptureIsFoundEveryWayALabelLooksForIt() throws {
+        var looks = CaptionLooks()
+        let capture = looks.capture(of: [mainBar], attempt: 1)
+        let result = CaptionLooks.Result(found: try found([mail, code], on: mainBar))
+        XCTAssertEqual(looks.finish(capture, result, moved: false), .kept)
+        XCTAssertEqual(looks.look(for: mail, on: bar(primary, retraction: 0.5, [mail]))?.exact, true)
+        let expanded = try XCTUnwrap(looks.look(for: mail, on: bar(primary, height: 146, [mail])))
+        XCTAssertFalse(expanded.exact || expanded.sameHeight)
+        let moved = try XCTUnwrap(looks.look(for: caption(3, "Mail"), on: mainBar))
+        XCTAssertFalse(moved.exact)
+        XCTAssertTrue(moved.sameHeight)
+    }
+
+    func testAKeptCaptureRecordsTheBackgroundItWasCapturedOver() throws {
+        var looks = CaptionLooks()
+        let capture = looks.capture(of: [mainBar], attempt: 1)
+        let result = CaptionLooks.Result(
+            found: try found([mail, code], on: mainBar), backgrounds: [primaryKey: "hills"])
+        _ = looks.finish(capture, result, moved: false)
+        XCTAssertEqual(looks.backgrounds, [primaryKey: "hills"])
+    }
+
+    func testACaptureTheBarsMovedUnderTakesNothing() throws {
+        var looks = CaptionLooks()
+        let capture = looks.capture(of: [mainBar], attempt: 1)
+        let result = CaptionLooks.Result(found: try found([mail], on: mainBar), backgrounds: [primaryKey: "hills"])
+        XCTAssertEqual(looks.finish(capture, result, moved: true), .moved)
+        XCTAssertEqual(looks.backgrounds, [:])
+        XCTAssertNil(looks.look(for: mail, on: mainBar))
+        XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar))
+    }
+
+    func testTheLastAttemptTheBarsMovedUnderSpendsEveryCaption() {
+        var looks = CaptionLooks()
+        let capture = looks.capture(of: [mainBar], attempt: CaptionLooks.attemptLimit)
+        _ = looks.finish(capture, CaptionLooks.Result(), moved: true)
+        XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar))
+        XCTAssertFalse(looks.lookMayArrive(for: code, on: mainBar))
+    }
+
+    /// The draw looks a caption up on the bar as it is, perhaps still sliding in; the capture asked
+    /// about it on the bar at rest.
+    func testACaptionACaptureFoundNoLookForIsSpentWhereverTheBarIs() throws {
+        var looks = CaptionLooks()
+        let capture = looks.capture(of: [bar(primary, retraction: 0.2, [mail, code])], attempt: 1)
+        XCTAssertEqual(looks.finish(capture, CaptionLooks.Result(found: try found([mail], on: mainBar)), moved: false),
+                       .kept)
+        XCTAssertFalse(looks.lookMayArrive(for: code, on: bar(primary, retraction: 0.7, [mail, code])))
+        XCTAssertFalse(looks.lookMayArrive(for: code, on: bar(primary, height: 146, [mail, code])))
+        XCTAssertTrue(looks.lookMayArrive(for: caption(3, "Docs"), on: mainBar))
+    }
+
+    /// A capture taken as the bar began to slide away put the captions 9pt high.
+    func testACaptureMovingACaptionKeepsTheLookInUseUntilAnotherAgrees() throws {
+        var looks = CaptionLooks()
+        _ = looks.finish(looks.capture(of: [mainBar], attempt: 1),
+                         CaptionLooks.Result(found: try found([mail, code], on: mainBar)), moved: false)
+        let mailKey = CaptionLooks.keys(bar: mainBar, caption: mail).exact
+        let moved = CaptionLooks.Result(found: [mailKey: try look(top: -1.5)])
+        XCTAssertEqual(looks.finish(looks.capture(of: [bar(primary, [mail])], attempt: 2), moved, moved: false),
+                       .retry)
+        XCTAssertEqual(looks.look(for: mail, on: mainBar)?.look.plain?.top, 7.5)
+        XCTAssertEqual(looks.look(for: mail, on: bar(primary, height: 146, [mail]))?.look.plain?.top, 7.5)
+        XCTAssertEqual(looks.look(for: caption(3, "Mail"), on: mainBar)?.look.plain?.top, 7.5)
+        let agreeing = CaptionLooks.Result(found: [mailKey: try look(top: -1.25)])
+        XCTAssertEqual(looks.finish(looks.capture(of: [bar(primary, [mail])], attempt: 3), agreeing, moved: false),
+                       .kept)
+        XCTAssertEqual(looks.look(for: mail, on: mainBar)?.look.plain?.top, -1.25)
+    }
+
+    func testAScreenACaptureFailedOnIsAskedAboutAgain() throws {
+        var looks = CaptionLooks()
+        let capture = looks.capture(of: [mainBar, builtInBar], attempt: 1)
+        let result = CaptionLooks.Result(
+            found: try found([mail, code], on: mainBar), failed: [builtInKey],
+            backgrounds: [primaryKey: "hills", builtInKey: "sea"])
+        XCTAssertEqual(looks.finish(capture, result, moved: false), .retry)
+        XCTAssertTrue(looks.lookMayArrive(for: caption(1, "Notes"), on: builtInBar))
+        XCTAssertEqual(looks.backgrounds, [primaryKey: "hills"])
+    }
+
+    func testAScreenTheLastAttemptFailedOnIsSpent() {
+        var looks = CaptionLooks()
+        let capture = looks.capture(of: [builtInBar], attempt: CaptionLooks.attemptLimit)
+        XCTAssertEqual(looks.finish(capture, CaptionLooks.Result(failed: [builtInKey]), moved: false), .kept)
+        XCTAssertFalse(looks.lookMayArrive(for: caption(1, "Notes"), on: builtInBar))
+    }
+
+    func testACaptureFromAnEarlierSessionIsIgnored() throws {
+        var looks = CaptionLooks()
+        let capture = looks.capture(of: [mainBar], attempt: CaptionLooks.attemptLimit)
+        looks.beginSession()
+        let result = CaptionLooks.Result(found: try found([mail], on: mainBar), backgrounds: [primaryKey: "hills"])
+        XCTAssertEqual(looks.finish(capture, result, moved: false), .stale)
+        XCTAssertNil(looks.look(for: mail, on: mainBar))
+        XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar))
+        XCTAssertEqual(looks.backgrounds, [:])
+    }
+
+    func testANewSessionWaitsForLooksAgain() {
+        var looks = CaptionLooks()
+        _ = looks.finish(looks.capture(of: [mainBar], attempt: 1), CaptionLooks.Result(), moved: false)
+        XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar))
+        looks.beginSession()
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
+    }
+
+    func testACaptionWaitsForItsLookOnlySoLongAtRest() {
+        var looks = CaptionLooks()
+        looks.noteBars(resting: true, at: 5)
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
+        looks.noteBars(resting: true, at: 6.25)
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
+        XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar))
+        looks.noteBars(resting: true, at: 5 + CaptionLooks.lookWait)
+        XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar))
+        XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar))
+    }
+
+    /// A swipe held part way, or Mission Control closing, moves the captions: the fallback must not
+    /// switch in over them as they go.
+    func testACaptionWaitsForItsLookOnlyWhileTheBarsRest() {
+        var looks = CaptionLooks()
+        looks.noteBars(resting: true, at: 0)
+        looks.noteBars(resting: true, at: 1)
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
+        looks.noteBars(resting: false, at: 1.1)
+        looks.noteBars(resting: false, at: 9)
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
+        looks.noteBars(resting: true, at: 10)
+        looks.noteBars(resting: true, at: 11.25)
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
+        looks.noteBars(resting: true, at: 11.5)
+        XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar))
+    }
+
+    // MARK: - Looks over another background
+
+    private let captured = ["0.0,0.0": "A|2560.0x1440.0@2.0|NSAppearanceNameDarkAqua|false|hills.heic|",
+                            "2560.0,904.0": "B|1728.0x1117.0@2.0|NSAppearanceNameDarkAqua|false|sea.heic|"]
+
+    func testTheSameBackgroundsKeepEveryScreensLooks() {
+        XCTAssertEqual(CaptionLooks.staleScreens(captured: captured, current: captured), [])
+    }
+
+    func testAChangedBackgroundMakesOnlyThatScreensLooksStale() {
+        var current = captured
+        current["2560.0,904.0"] = "B|1728.0x1117.0@2.0|NSAppearanceNameDarkAqua|false|desert.heic|"
+        XCTAssertEqual(CaptionLooks.staleScreens(captured: captured, current: current), ["2560.0,904.0"])
+    }
+
+    func testADisconnectedScreenKeepsItsLooks() {
+        let current = ["0.0,0.0": captured["0.0,0.0"] ?? ""]
+        XCTAssertEqual(CaptionLooks.staleScreens(captured: captured, current: current), [])
+    }
+
+    func testDroppingAScreensLooksKeepsTheOtherScreens() {
+        let mainKeys = CaptionLooks.keys(bar: mainBar, caption: mail)
+        let builtInKeys = CaptionLooks.keys(bar: builtInBar, caption: caption(1, "Notes"))
+        let entries = [
+            mainKeys.exact: 1, mainKeys.anyHeight: 2, mainKeys.name: 3,
+            builtInKeys.exact: 4, builtInKeys.anyHeight: 5, builtInKeys.name: 6,
+        ]
+        XCTAssertEqual(Set(CaptionLooks.dropping(entries, on: [builtInKeys.screen]).values), [1, 2, 3])
+    }
+
+    func testLooksCapturedOverAnotherBackgroundAreDropped() throws {
+        var looks = CaptionLooks()
+        let capture = looks.capture(of: [mainBar, builtInBar], attempt: 1)
+        let result = CaptionLooks.Result(
+            found: try found([mail, code], on: mainBar)
+                .merging(try found([caption(1, "Notes")], on: builtInBar)) { $1 },
+            backgrounds: [primaryKey: "hills", builtInKey: "sea"])
+        _ = looks.finish(capture, result, moved: false)
+        looks.beginSession()
+        let current = [primaryKey: "hills", builtInKey: "desert"]
+        XCTAssertEqual(looks.dropLooks(capturedOver: current), 1)
+        XCTAssertNotNil(looks.look(for: mail, on: mainBar))
+        XCTAssertNil(looks.look(for: caption(1, "Notes"), on: builtInBar))
+        XCTAssertEqual(looks.backgrounds, [primaryKey: "hills"])
+    }
+
+    /// A pattern wallpaper's fill colour describes itself with its address, different each time it is read.
+    func testAFillColourIsDescribedTheSameEachTime() {
+        let first = CaptionLooks.describe(NSColor(srgbRed: 0.2, green: 0.4, blue: 0.6, alpha: 1))
+        XCTAssertEqual(first, CaptionLooks.describe(NSColor(srgbRed: 0.2, green: 0.4, blue: 0.6, alpha: 1)))
+        XCTAssertEqual(first, "0.200 0.400 0.600 1.000")
+    }
+
     // MARK: - Dock motion
 
     /// Each motion runs from 0 to 1 without turning back on the way, though some overshoot a little
@@ -576,5 +800,68 @@ final class MissionControlLabelsTests: XCTestCase {
         let timing = DockMotion.makeRoom
         let time = timing.time(toReach: 0.5)
         XCTAssertEqual(timing.progress(at: time, from: 0), 0.5, accuracy: 0.001)
+    }
+
+    // MARK: - Motion recording
+
+    func testDrawnLabelsAreLoggedByKeyAtTheirFrames() {
+        let labels = [
+            DrawnLabel(key: "12", frame: CGRect(x: 1180.5, y: -4, width: 76.5, height: 20)),
+            DrawnLabel(key: "7", frame: CGRect(x: 2600, y: 1023.04, width: 80, height: 22)),
+        ]
+        XCTAssertEqual(
+            MissionControlMotionRecorder.drawnLine(labels),
+            "ours 12@1180.5,-4.0,76.5,20.0 7@2600.0,1023.0,80.0,22.0")
+    }
+
+    func testAFrameWithNoLabelsIsStillLogged() {
+        XCTAssertEqual(MissionControlMotionRecorder.drawnLine([]), "ours")
+    }
+
+    func testTheFilmedBandIs150PointsUnlessAskedOtherwise() {
+        XCTAssertEqual(MissionControlMotionRecorder.band(0, displayHeight: 1440), 150)
+        XCTAssertEqual(MissionControlMotionRecorder.band(-20, displayHeight: 1440), 150)
+        XCTAssertEqual(MissionControlMotionRecorder.band(80, displayHeight: 1440), 80)
+    }
+
+    func testTheFilmedBandIsEven() {
+        XCTAssertEqual(MissionControlMotionRecorder.band(151, displayHeight: 1440), 152)
+        XCTAssertEqual(MissionControlMotionRecorder.band(100.4, displayHeight: 1440), 100)
+        XCTAssertEqual(MissionControlMotionRecorder.band(0.5, displayHeight: 1440), 2)
+    }
+
+    func testTheFilmedBandStaysWithinTheDisplay() {
+        XCTAssertEqual(MissionControlMotionRecorder.band(5000, displayHeight: 1440), 1440)
+        XCTAssertEqual(MissionControlMotionRecorder.band(5000, displayHeight: 1117), 1116)
+    }
+
+    func testTheTallyWaitsForItsInterval() {
+        var tally = FrameTally(interval: 5)
+        XCTAssertNil(tally.count(.complete(shown: 10, written: true), at: 10.01))
+        XCTAssertNil(tally.count(.idle, at: 14.9))
+    }
+
+    func testTheTallySumsUpEachInterval() {
+        var tally = FrameTally(interval: 5)
+        _ = tally.count(.complete(shown: 10, written: true), at: 10.01)
+        _ = tally.count(.complete(shown: 10.05, written: false), at: 10.07)
+        _ = tally.count(.idle, at: 12)
+        _ = tally.count(.other, at: 13)
+        XCTAssertEqual(
+            tally.count(.complete(shown: 15, written: true), at: 15.01),
+            "video tally 5.0s: 3 complete, 1 idle, 1 other, 1 unwritten, longest gap 4950.0ms, "
+                + "longest delay 20.0ms")
+    }
+
+    func testTheTallyStartsAfreshAfterEachSummaryButCarriesTheGapOn() {
+        var tally = FrameTally(interval: 5)
+        _ = tally.count(.complete(shown: 10, written: true), at: 10.01)
+        _ = tally.count(.idle, at: 15.01)
+        XCTAssertNil(tally.count(.complete(shown: 15.1, written: true), at: 15.11))
+        XCTAssertEqual(
+            tally.summary(at: 16),
+            "video tally 0.9s: 1 complete, 0 idle, 0 other, 0 unwritten, longest gap 5100.0ms, "
+                + "longest delay 10.0ms")
+        XCTAssertNil(tally.summary(at: 17))
     }
 }

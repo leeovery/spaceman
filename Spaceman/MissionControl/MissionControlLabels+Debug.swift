@@ -18,6 +18,13 @@ extension MissionControlLabels {
         MissionControlMotionRecorder.shared.note(text(), at: time)
     }
 
+    /// Notes in the debug motion recording, when it is on, where each label is placed for the frame
+    /// reaching the screen at `frameTime`; none, once they are hidden.
+    func recordDrawn(at frameTime: TimeInterval) {
+        guard MissionControlMotionRecorder.isEnabled else { return }
+        MissionControlMotionRecorder.shared.noteDrawn(overlay.drawnLabels(at: frameTime), at: frameTime)
+    }
+
     func recordPointer() {
         guard MissionControlMotionRecorder.isEnabled else { return }
         let point = NSEvent.mouseLocation
@@ -72,12 +79,15 @@ extension MissionControlLabels {
                       caption.centre.x, caption.centre.y, kind, origin), at: time)
     }
 
-    /// Logs where the first bar's first two labels go against the Dock's captions, when it changes.
+    /// Logs where the labels over the first bar's first two captions go, when it changes.
     func trace(_ bar: BarLayout?, labels: [MissionControlLabel], retraction: CGFloat) {
         guard let bar else { return }
-        let parts = zip(bar.captions.prefix(2), labels.prefix(2)).map { caption, label in
-            let look = label.look == nil ? "box" : (looks[Self.lookKeys(bar: bar, caption: caption).exact] != nil
-                ? "exact" : "borrowed")
+        let parts = bar.captions.prefix(2).map { caption in
+            guard let label = labels.first(where: { $0.key == caption.spaceID && $0.screen == bar.screen }) else {
+                return "\(caption.covers) at x \(Int(caption.centre.x.rounded())) not covered"
+            }
+            let look = label.look == nil ? "box"
+                : captionLooks.look(for: caption, on: bar)?.exact == true ? "exact" : "borrowed"
             let lift = retraction * bar.frame.height
             let drawn = label.lookOrigin.map { "\(Int($0.x.rounded())),\(Int(($0.y - lift).rounded()))" } ?? "centred"
             return "\(caption.covers) at x \(Int(caption.centre.x.rounded())) drawn \(drawn) \(look)"

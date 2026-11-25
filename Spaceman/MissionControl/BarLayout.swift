@@ -88,15 +88,18 @@ struct ScreenInfo {
     let uuid: String?
 
     static func current() -> [ScreenInfo] {
-        let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
-        return NSScreen.screens.map { screen in
-            let appKit = screen.frame
+        NSScreen.screens.map { screen in
             let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
             return ScreenInfo(
-                frame: CGRect(x: appKit.minX, y: primaryTop - appKit.maxY, width: appKit.width, height: appKit.height),
-                displayID: number?.uint32Value ?? 0,
+                frame: axFrame(of: screen), displayID: number?.uint32Value ?? 0,
                 uuid: MissionControlLabels.displayUUID(of: screen))
         }
+    }
+
+    static func axFrame(of screen: NSScreen) -> CGRect {
+        let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
+        let appKit = screen.frame
+        return CGRect(x: appKit.minX, y: primaryTop - appKit.maxY, width: appKit.width, height: appKit.height)
     }
 }
 

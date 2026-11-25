@@ -1,0 +1,53 @@
+#!/bin/bash
+# Builds Spaceman.app, unsigned, for both Apple silicon and Intel, into the
+# folder given, at the version given, building in the scratch folder given.
+# press signs what it makes, as .press.toml says: scripts/build runs it, then
+# press sign --dev, and a release's press prepare runs it in a worktree of its
+# own, then signs, notarises and staples it.
+set -euo pipefail
+
+if [[ $# -ne 3 || -z $1 || -z $2 || -z $3 ]]; then
+  echo "Usage: scripts/bundle <folder> <version> <scratch folder>" >&2
+  exit 1
+fi
+
+repo=$(cd "$(dirname "$0")/.." && pwd)
+out=$1
+version=$2
+temp=$3
+identifier=com.leeovery.Spaceman
+bundle="$out/Spaceman.app"
+
+if [[ -e "$bundle" ]]; then
+  echo "$bundle is there already: scripts/bundle makes one into a folder without one." >&2
+  exit 1
+fi
+
+# Apple reads a bundle's versions as numbers and dots alone, so a
+# pre-release's Info.plist carries its release's. CURRENT_PROJECT_VERSION
+# follows MARKETING_VERSION in the project.
+plain=${version%%-*}
+
+xcodebuild -project "$repo/Spaceman.xcodeproj" -scheme Spaceman -configuration Release \
+  -destination 'generic/platform=macOS' -derivedDataPath "$temp/DerivedData" \
+  -onlyUsePackageVersionsFromResolvedFile \
+  MARKETING_VERSION="$plain" CODE_SIGNING_ALLOWED=NO build
+
+built="$temp/DerivedData/Build/Products/Release/Spaceman.app"
+info="$built/Contents/Info.plist"
+
+fail() {
+  echo "$built $1" >&2
+  exit 1
+}
+
+got=$(plutil -extract CFBundleShortVersionString raw -o - "$info")
+[[ $got == "$plain" ]] || fail "is version $got, not $plain."
+got=$(plutil -extract CFBundleIdentifier raw -o - "$info")
+[[ $got == "$identifier" ]] || fail "is named $got, not $identifier."
+archs=$(lipo -archs "$built/Contents/MacOS/Spaceman")
+[[ " $archs " == *" arm64 "* && " $archs " == *" x86_64 "* ]] ||
+  fail "is built for $archs, not arm64 and x86_64."
+
+mkdir -p "$out"
+ditto "$built" "$bundle"

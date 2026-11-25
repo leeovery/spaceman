@@ -120,11 +120,7 @@ final class MissionControlLabels {
 
     // Native look: labels drawn to match the captions they cover, from a capture of the bar at rest.
     /// Looks by caption, kept across sessions so a label slides in matched from its first frame.
-    var looks: [String: NativeCaptionLook] = [:]
-    /// The same looks keyed without the bar's height, for a bar that has changed shape since.
-    var looksAnyHeight: [String: NativeCaptionLook] = [:]
-    /// The same looks by screen and name alone, for a caption that has moved to another thumbnail.
-    var looksByName: [String: NativeCaptionLook] = [:]
+    var captionLooks = CaptionLooks()
     /// The bars as last seen at rest, and since when, so a capture waits for them to settle.
     var restingSignature: String?
     var restingSince: TimeInterval = 0
@@ -134,10 +130,10 @@ final class MissionControlLabels {
     /// Counts frames that found the bars moving, or not fully in, so a capture can tell whether
     /// anything moved while it ran.
     var motionCount = 0
-    /// Captures that placed a caption away from its look in use, each waiting for another to agree.
-    var waitingLooks: [String: NativeCaptionLook] = [:]
     /// Captures this session by the bars' signature, so captures that never agree stop retrying.
     var captureAttempts: [String: Int] = [:]
+    /// The style this session's labels are drawn in, fixed at its start so a session never mixes them.
+    var labelStyle = MissionControlLabelStyle.spaceColors
     var requestedCaptureAccess = false
     /// Each display's current space, whose caption Mission Control puts in a pill.
     var currentSpaceIDs: Set<String> = []
@@ -145,7 +141,7 @@ final class MissionControlLabels {
     var lastTrace: String?
 
     var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "showMissionControlLabels")
+        UserDefaults.standard.bool(forKey: MissionControlLabelStyle.namesShownKey)
     }
 
     /// How often to look for Mission Control while it is closed (default 50ms). A trackpad swipe
@@ -397,9 +393,7 @@ final class MissionControlLabels {
         else { return }
         isTracking = true
         trackingStarted = ProcessInfo.processInfo.systemUptime
-        restingSignature = nil
-        capturedSignature = nil
-        captureAttempts = [:]
+        beginLookSession()
         sawBar = false
         latestReadingTime = 0
         previousReadingTime = 0
@@ -512,6 +506,7 @@ final class MissionControlLabels {
         clock.stop()
         reader.end()
         overlay.hide()
+        recordDrawn(at: ProcessInfo.processInfo.systemUptime)
         retraction = 1
         swipe.settle()
         logOutcome("Spaces Bar not found")
@@ -535,8 +530,11 @@ final class MissionControlLabels {
         guard isTracking else { return }
         // A frame that doesn't find the bars fully in and still counts as motion for the capture.
         var resting = false
-        defer { if !resting { noteMotion() } }
         let now = ProcessInfo.processInfo.systemUptime
+        defer {
+            if !resting { noteMotion() }
+            captionLooks.noteBars(resting: resting, at: now)
+        }
         // Replayed slides are worked out for when this frame reaches the screen.
         let frameTime = max(clock.targetTime ?? now, now)
         if let running = shift, running.slide.isFinished(at: frameTime) { shift = nil }
@@ -586,6 +584,7 @@ final class MissionControlLabels {
         switch placement(reading: reading, dock: dock, now: now, frameTime: frameTime) {
         case .hidden:
             overlay.hide()
+            recordDrawn(at: frameTime)
         case .gone:
             endTracking()
         case .slide(let timed):
