@@ -23,8 +23,8 @@ import AppKit
 
 /// A name label to draw, centred on `centre` on the screen whose frame is `screen`. Both are in
 /// AX coordinates: origin at the top-left of the primary display, y down. With a `look`, the label
-/// is drawn to match the native caption it covers, with its top-left at `lookOrigin`; without one,
-/// as a dark box.
+/// is drawn to match the native caption it covers, with its top-left at `lookOrigin`; otherwise as a
+/// box in its space's colour, or black for a space without one.
 struct MissionControlLabel {
     let name: String
     let covers: String
@@ -234,7 +234,7 @@ private final class OverlayWindow: NSWindow {
             layer.key = label.key
             layer.configure(label, style: style, scale: scale)
             let size = layer.bounds.size
-            // The label's top-left in AX coordinates: a matched look is placed for it; a dark box is centred.
+            // The label's top-left in AX coordinates: a matched look is placed for it; a box is centred.
             let topLeft = label.lookOrigin
                 ?? CGPoint(x: label.centre.x - size.width / 2, y: label.centre.y - size.height / 2)
             // Window-local coordinates, with y up from the strip's bottom, on whole device pixels.
@@ -335,18 +335,15 @@ private final class OverlayWindow: NSWindow {
 
 // MARK: - LabelLayer
 
-/// One name label, covering a "Desktop N" caption: the matched look's image, or a dark box with
-/// the name.
+/// One name label, covering a "Desktop N" caption: the matched look's image, or a box with the
+/// name in its space's colour.
 private final class LabelLayer: CALayer {
 
     struct Style: Equatable {
-        let useColor: Bool
         let decoration: Int
 
         static var current: Style {
-            Style(
-                useColor: UserDefaults.standard.bool(forKey: "areMissionControlLabelsColored"),
-                decoration: UserDefaults.standard.integer(forKey: "decorationActive"))
+            Style(decoration: UserDefaults.standard.integer(forKey: "decorationActive"))
         }
     }
 
@@ -439,7 +436,7 @@ private final class LabelLayer: CALayer {
         content = wanted
 
         text.string = label.name
-        if style.useColor, let hex = label.colorHex, let color = NSColor.fromHex(hex) {
+        if let hex = label.colorHex, let color = NSColor.fromHex(hex) {
             backgroundColor = color.cgColor
             text.foregroundColor = color.contrastingTextColor.cgColor
         } else {

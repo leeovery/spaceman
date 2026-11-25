@@ -112,11 +112,6 @@ enum MissionControlCaptionLook {
     private static let minTextHeight: CGFloat = 5
     private static let maxTextHeight: CGFloat = 22
 
-    /// Whether labels match the native captions (default on). Needs Screen Recording permission.
-    static var isEnabled: Bool {
-        UserDefaults.standard.object(forKey: "missionControlLabelsNativeLook") as? Bool ?? true
-    }
-
     /// Saves each capture, and the labels drawn over it, to Spaceman's caches folder.
     static var isDebugging: Bool {
         UserDefaults.standard.bool(forKey: "missionControlLookDebug")

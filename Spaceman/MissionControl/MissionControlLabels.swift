@@ -132,8 +132,8 @@ final class MissionControlLabels {
     var motionCount = 0
     /// Captures this session by the bars' signature, so captures that never agree stop retrying.
     var captureAttempts: [String: Int] = [:]
-    /// Whether Screen Recording is granted: macOS only changes the answer for a relaunched app.
-    var captureAccess = false
+    /// The style this session's labels are drawn in, fixed at its start so a session never mixes them.
+    var labelStyle = MissionControlLabelStyle.spaceColors
     var requestedCaptureAccess = false
     /// Each display's current space, whose caption Mission Control puts in a pill.
     var currentSpaceIDs: Set<String> = []
@@ -141,7 +141,7 @@ final class MissionControlLabels {
     var lastTrace: String?
 
     var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "showMissionControlLabels")
+        UserDefaults.standard.bool(forKey: MissionControlLabelStyle.namesShownKey)
     }
 
     /// How often to look for Mission Control while it is closed (default 50ms). A trackpad swipe

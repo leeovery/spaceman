@@ -16,7 +16,7 @@ extension MissionControlLabels {
     func draw(
         _ bars: [BarLayout], retraction: CGFloat, selected: [String?], slide: TimedSlide?, at frameTime: TimeInterval
     ) {
-        let matching = MissionControlCaptionLook.isEnabled
+        let matching = labelStyle == .nativeLook
         var labels: [MissionControlLabel] = []
         for (index, measured) in bars.enumerated() {
             let selectedTitle = index < selected.count ? selected[index] : nil
@@ -39,8 +39,7 @@ extension MissionControlLabels {
                 // Covered by the zoom to another desktop, as the Dock's caption is.
                 if let cover = zoomCover, zoom?.screen == bar.screen, cover.contains(centre) { continue }
                 let found = matching ? captionLooks.look(for: caption, on: bar) : nil
-                guard found != nil || !lookMayArrive(for: caption, on: bar, nativeLook: matching)
-                else { continue }
+                guard found != nil || !lookMayArrive(for: caption, on: bar) else { continue }
                 var dragged: TimedMove?
                 if let drag, drag.screen == bar.screen {
                     if caption.spaceID == drag.spaceID {

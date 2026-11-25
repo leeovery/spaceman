@@ -12,25 +12,25 @@ extension MissionControlLabels {
 
     /// Asks, once per launch, for the Screen Recording permission the native look needs.
     func requestCaptureAccessIfNeeded() {
-        guard MissionControlCaptionLook.isEnabled, Self.spacesBarIsInDock, !requestedCaptureAccess else { return }
+        guard Self.spacesBarIsInDock, !requestedCaptureAccess, MissionControlLabelStyle.needsScreenRecordingNow
+        else { return }
         requestedCaptureAccess = true
-        if !CGPreflightScreenCaptureAccess() {
-            Self.log.log("Asking for Screen Recording, to match Mission Control's captions")
-            CGRequestScreenCaptureAccess()
-        }
+        Self.log.log("Asking for Screen Recording, to match Mission Control's captions")
+        CGRequestScreenCaptureAccess()
     }
 
-    /// Readies the native look for a session: captures start afresh, and looks captured over another
-    /// background are dropped, so the native captions show until they are captured again.
+    /// Readies the native look for a session: the style is decided afresh, captures start afresh, and
+    /// looks captured over another background are dropped, so the native captions show until they are
+    /// captured again.
     func beginLookSession() {
-        captureAccess = CGPreflightScreenCaptureAccess()
+        labelStyle = MissionControlLabelStyle.current
         restingSignature = nil
         capturedSignature = nil
         captureAttempts = [:]
         // A capture from the last session may still be running: it is ignored when it lands.
         isCapturing = false
         captionLooks.beginSession()
-        guard MissionControlCaptionLook.isEnabled else { return }
+        guard labelStyle == .nativeLook else { return }
         let dropped = captionLooks.dropLooks(capturedOver: CaptionLooks.currentBackgrounds())
         if dropped > 0 { Self.log.log("Dropped looks captured over another background on \(dropped) screens") }
     }
@@ -44,8 +44,8 @@ extension MissionControlLabels {
 
     /// Whether a look may yet be captured for a caption that has none. If so its native caption shows
     /// until then; if not, its label is drawn in the fallback style so the name still shows.
-    func lookMayArrive(for caption: Caption, on bar: BarLayout, nativeLook: Bool) -> Bool {
-        nativeLook && captureAccess && captionLooks.lookMayArrive(for: caption, on: bar)
+    func lookMayArrive(for caption: Caption, on bar: BarLayout) -> Bool {
+        labelStyle == .nativeLook && captionLooks.lookMayArrive(for: caption, on: bar)
     }
 
     /// Identifies the bars' layout at rest, so a capture can wait for it to settle.
@@ -68,7 +68,7 @@ extension MissionControlLabels {
     /// native captions: each session, and again when they change, as when hovering expands the
     /// thumbnails.
     func captureIfSettled(_ bars: [BarLayout], now: TimeInterval) {
-        guard MissionControlCaptionLook.isEnabled else { return }
+        guard labelStyle == .nativeLook else { return }
         // Captions measured mid-slide sit off their resting places: wait for a measurement at rest.
         guard bars.allSatisfy({ abs($0.frame.minY - $0.screen.minY) < 0.5 }) else {
             noteMotion()
@@ -85,7 +85,6 @@ extension MissionControlLabels {
         guard !isCapturing, signature != capturedSignature, attempts < CaptionLooks.attemptLimit,
               now - restingSince >= Self.captureSettle
         else { return }
-        guard captureAccess else { return }
         capturedSignature = signature
         captureAttempts[signature] = attempts + 1
         isCapturing = true

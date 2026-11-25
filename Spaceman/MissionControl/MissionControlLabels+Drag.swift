@@ -109,8 +109,9 @@ extension MissionControlLabels {
     }
 
     /// Watches Mission Control's own captions across `bar`'s screen while a thumbnail is dragged over it.
+    /// Only for the native look: in the spaces' colours nothing captures the screen.
     private func startWatching(_ bar: BarLayout) {
-        guard let captionY = bar.captions.first?.centre.y else { return }
+        guard labelStyle == .nativeLook, let captionY = bar.captions.first?.centre.y else { return }
         let watcher: MissionControlCaptionWatcher
         if let existing = captionWatcher {
             watcher = existing
