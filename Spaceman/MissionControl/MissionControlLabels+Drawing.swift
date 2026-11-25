@@ -38,6 +38,10 @@ extension MissionControlLabels {
                 var centre = CGPoint(x: caption.centre.x, y: caption.centre.y + offset)
                 // Covered by the zoom to another desktop, as the Dock's caption is.
                 if let cover = zoomCover, zoom?.screen == bar.screen, cover.contains(centre) { continue }
+                let found = matching ? look(for: caption, on: bar) : nil
+                guard Self.drawsLabel(
+                    found: found, lookMayArrive: lookMayArrive(for: caption, on: bar, nativeLook: matching))
+                else { continue }
                 var dragged: TimedMove?
                 if let drag, drag.screen == bar.screen {
                     if caption.spaceID == drag.spaceID {
@@ -72,7 +76,6 @@ extension MissionControlLabels {
                         .earlier(by: clock.frameDuration / 2)
                     }
                 }
-                let found = matching ? look(for: caption, on: bar) : nil
                 let variant = found?.look.variant(current: selectedTitle.map { $0 == caption.covers }
                     ?? currentSpaceIDs.contains(caption.spaceID))
                 var label = Self.label(for: caption, centre: centre, screen: bar.screen, look: variant)

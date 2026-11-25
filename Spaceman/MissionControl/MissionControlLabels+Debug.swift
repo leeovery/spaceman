@@ -72,10 +72,13 @@ extension MissionControlLabels {
                       caption.centre.x, caption.centre.y, kind, origin), at: time)
     }
 
-    /// Logs where the first bar's first two labels go against the Dock's captions, when it changes.
+    /// Logs where the labels over the first bar's first two captions go, when it changes.
     func trace(_ bar: BarLayout?, labels: [MissionControlLabel], retraction: CGFloat) {
         guard let bar else { return }
-        let parts = zip(bar.captions.prefix(2), labels.prefix(2)).map { caption, label in
+        let parts = bar.captions.prefix(2).map { caption in
+            guard let label = labels.first(where: { $0.key == caption.spaceID && $0.screen == bar.screen }) else {
+                return "\(caption.covers) at x \(Int(caption.centre.x.rounded())) not covered"
+            }
             let look = label.look == nil ? "box" : (looks[Self.lookKeys(bar: bar, caption: caption).exact] != nil
                 ? "exact" : "borrowed")
             let lift = retraction * bar.frame.height

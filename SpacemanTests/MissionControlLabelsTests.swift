@@ -351,6 +351,107 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(settled.waiting?.plain?.top, 3)
     }
 
+    // MARK: - Labels waiting for a look
+
+    func testACaptionWithItsOwnLookIsDrawn() throws {
+        let found = (look: try look(top: 7.5), exact: true, sameHeight: true)
+        XCTAssertTrue(MissionControlLabels.drawsLabel(found: found, lookMayArrive: true))
+    }
+
+    func testACaptionWithABorrowedLookIsDrawn() throws {
+        let otherHeight = (look: try look(top: 7.5), exact: false, sameHeight: false)
+        let sameName = (look: try look(top: 7.5), exact: false, sameHeight: true)
+        XCTAssertTrue(MissionControlLabels.drawsLabel(found: otherHeight, lookMayArrive: true))
+        XCTAssertTrue(MissionControlLabels.drawsLabel(found: sameName, lookMayArrive: true))
+    }
+
+    func testACaptionWaitingForALookIsLeftShowing() {
+        XCTAssertFalse(MissionControlLabels.drawsLabel(found: nil, lookMayArrive: true))
+    }
+
+    func testACaptionNoLookCanReachIsDrawnInTheFallbackStyle() {
+        XCTAssertTrue(MissionControlLabels.drawsLabel(found: nil, lookMayArrive: false))
+    }
+
+    func testALookMayArriveWithTheNativeLookOnAndScreenRecordingGranted() {
+        XCTAssertTrue(MissionControlLabels.lookMayArrive(nativeLook: true, captureAccess: true, spent: false))
+    }
+
+    func testNoLookArrivesWithTheNativeLookOff() {
+        XCTAssertFalse(MissionControlLabels.lookMayArrive(nativeLook: false, captureAccess: true, spent: false))
+    }
+
+    func testNoLookArrivesWithoutScreenRecording() {
+        XCTAssertFalse(MissionControlLabels.lookMayArrive(nativeLook: true, captureAccess: false, spent: false))
+    }
+
+    func testNoLookArrivesOnceCapturesAreSpentOnTheCaption() {
+        XCTAssertFalse(MissionControlLabels.lookMayArrive(nativeLook: true, captureAccess: true, spent: true))
+    }
+
+    private let asked = [(exact: "a|72", anyHeight: "a"), (exact: "b|72", anyHeight: "b")]
+
+    func testACaptureSpendsTheCaptionsItFoundNoLookFor() throws {
+        let found = ["a|72": try look(top: 7.5)]
+        XCTAssertEqual(MissionControlLabels.spentKeys(asked: asked, found: found, dropped: false, attempts: 1), ["b"])
+    }
+
+    func testACaptureFindingEveryCaptionSpendsNone() throws {
+        let found = ["a|72": try look(top: 7.5), "b|72": try look(top: 7.5)]
+        XCTAssertEqual(MissionControlLabels.spentKeys(asked: asked, found: found, dropped: false, attempts: 1), [])
+    }
+
+    func testADroppedCaptureSpendsNoneWhileAttemptsRemain() {
+        let attempts = MissionControlLabels.captureAttemptLimit - 1
+        XCTAssertEqual(MissionControlLabels.spentKeys(asked: asked, found: [:], dropped: true, attempts: attempts), [])
+    }
+
+    func testTheLastAttemptDroppedSpendsEveryCaptionItAskedAbout() throws {
+        let attempts = MissionControlLabels.captureAttemptLimit
+        let found = ["a|72": try look(top: 7.5)]
+        XCTAssertEqual(
+            MissionControlLabels.spentKeys(asked: asked, found: found, dropped: true, attempts: attempts), ["a", "b"])
+    }
+
+    // MARK: - Looks over another background
+
+    private let captured = ["0.0,0.0": "hills.heic|fill|NSAppearanceNameDarkAqua|false",
+                            "2560.0,904.0": "sea.heic|fill|NSAppearanceNameDarkAqua|false"]
+
+    func testTheSameBackgroundsKeepEveryScreensLooks() {
+        XCTAssertEqual(MissionControlLabels.staleScreens(captured: captured, current: captured), [])
+    }
+
+    func testAChangedWallpaperMakesOnlyThatScreensLooksStale() {
+        var current = captured
+        current["2560.0,904.0"] = "desert.heic|fill|NSAppearanceNameDarkAqua|false"
+        XCTAssertEqual(MissionControlLabels.staleScreens(captured: captured, current: current), ["2560.0,904.0"])
+    }
+
+    func testAChangedAppearanceMakesEveryScreensLooksStale() {
+        let current = captured.mapValues { $0.replacingOccurrences(of: "DarkAqua", with: "Aqua") }
+        XCTAssertEqual(
+            MissionControlLabels.staleScreens(captured: captured, current: current), ["0.0,0.0", "2560.0,904.0"])
+    }
+
+    func testADisconnectedScreenKeepsItsLooks() {
+        let current = ["0.0,0.0": captured["0.0,0.0"] ?? ""]
+        XCTAssertEqual(MissionControlLabels.staleScreens(captured: captured, current: current), [])
+    }
+
+    func testDroppingAScreensLooksKeepsTheOtherScreens() {
+        let builtInKey = MissionControlLabels.screenKey(builtIn)
+        let entries = [
+            "\(MissionControlLabels.screenKey(primary))|Desktop 1|Mail|40": 1,
+            "\(MissionControlLabels.screenKey(primary))|Mail|40": 2,
+            "\(builtInKey)|Desktop 1|Code|72": 3,
+            "\(builtInKey)|Desktop 1|Code": 4,
+            "\(builtInKey)|Code|72": 5,
+        ]
+        let kept = MissionControlLabels.dropping(entries, on: [builtInKey])
+        XCTAssertEqual(Set(kept.values), [1, 2])
+    }
+
     // MARK: - Dock motion
 
     /// Each motion runs from 0 to 1 without turning back on the way, though some overshoot a little

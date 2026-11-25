@@ -138,6 +138,14 @@ final class MissionControlLabels {
     var waitingLooks: [String: NativeCaptionLook] = [:]
     /// Captures this session by the bars' signature, so captures that never agree stop retrying.
     var captureAttempts: [String: Int] = [:]
+    /// Captions this session's captures have been spent on without a look, by `lookKeys(...).anyHeight`:
+    /// drawn in the fallback style rather than left showing for a look that won't come. A look captured
+    /// later still wins.
+    var spentLooks: Set<String> = []
+    /// What each screen showed behind its captions when its looks were captured, by `screenKey`.
+    var lookBackgrounds: [String: String] = [:]
+    /// Whether Screen Recording is granted: macOS only changes the answer for a relaunched app.
+    var captureAccess = false
     var requestedCaptureAccess = false
     /// Each display's current space, whose caption Mission Control puts in a pill.
     var currentSpaceIDs: Set<String> = []
@@ -397,9 +405,7 @@ final class MissionControlLabels {
         else { return }
         isTracking = true
         trackingStarted = ProcessInfo.processInfo.systemUptime
-        restingSignature = nil
-        capturedSignature = nil
-        captureAttempts = [:]
+        beginLookSession()
         sawBar = false
         latestReadingTime = 0
         previousReadingTime = 0
