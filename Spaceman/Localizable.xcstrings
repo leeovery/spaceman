@@ -1,0 +1,521 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "" : {
+
+    },
+    "%lld" : {
+
+    },
+    "Accessibility" : {
+
+    },
+    "Active style" : {
+
+    },
+    "All spaces" : {
+
+    },
+    "All Spaces" : {
+
+    },
+    "Always transparent" : {
+
+    },
+    "Appearance" : {
+
+    },
+    "Auto-shrink when there is shortage of space" : {
+
+    },
+    "Automation" : {
+
+    },
+    "Bordered" : {
+
+    },
+    "Bordered, pill" : {
+
+    },
+    "Bordered, rectangular" : {
+
+    },
+    "Bordered, rounded" : {
+
+    },
+    "Buttons Shown" : {
+
+    },
+    "Cancel" : {
+
+    },
+    "Clear all colors" : {
+
+    },
+    "Clear color" : {
+
+    },
+    "Compact" : {
+
+    },
+    "Complete" : {
+
+    },
+    "Configure" : {
+
+    },
+    "Current only" : {
+
+    },
+    "Current Only" : {
+
+    },
+    "Device Control and Data Access" : {
+      "extractionState" : "manual"
+    },
+    "Dismiss" : {
+
+    },
+    "Display spaces in menu as" : {
+
+    },
+    "Displays" : {
+
+    },
+    "Enable under Keyboard → Shortcuts → Mission Control:" : {
+
+    },
+    "Enormous" : {
+
+    },
+    "Error: %@\n\nPlease grant %@ permissions to Spaceman in System Settings → Privacy and Security." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Error: %1$@\n\nPlease grant %2$@ permissions to Spaceman in System Settings → Privacy and Security."
+          }
+        }
+      }
+    },
+    "Extra Large" : {
+
+    },
+    "Filled" : {
+
+    },
+    "Filled, pill" : {
+
+    },
+    "Filled, rectangular" : {
+
+    },
+    "Filled, rounded" : {
+
+    },
+    "Fixed Width" : {
+
+    },
+    "Font" : {
+
+    },
+    "Fullscreen Spaces" : {
+
+    },
+    "General" : {
+
+    },
+    "Grid" : {
+
+    },
+    "Icon size" : {
+
+    },
+    "Icon Size" : {
+
+    },
+    "Icon Style" : {
+
+    },
+    "Icon text" : {
+
+    },
+    "Icon Text" : {
+
+    },
+    "Icon width" : {
+
+    },
+    "Icons will be invisible with these settings." : {
+
+    },
+    "If the display order seems erratic, please pay close attention to the horizontal alignment in System Settings → Displays → Arrange." : {
+
+    },
+    "Inactive icons will be dimmed for visual distinctness." : {
+
+    },
+    "Inactive style" : {
+
+    },
+    "Large" : {
+
+    },
+    "Launch Spaceman at login" : {
+
+    },
+    "List" : {
+
+    },
+    "Main Display Only" : {
+
+    },
+    "Medium" : {
+
+    },
+    "Menu" : {
+
+    },
+    "Mission Control" : {
+
+    },
+    "Mission Control Button" : {
+
+    },
+    "Name" : {
+
+    },
+    "Names" : {
+
+    },
+    "Narrow" : {
+
+    },
+    "Navigation Arrows" : {
+
+    },
+    "Nearby range: ±%lld" : {
+
+    },
+    "Nearby spaces" : {
+
+    },
+    "Nearby Spaces" : {
+
+    },
+    "Next" : {
+
+    },
+    "No decoration" : {
+
+    },
+    "No Decoration" : {
+
+    },
+    "No shortcut known" : {
+
+    },
+    "No spaces detected yet." : {
+
+    },
+    "No text" : {
+
+    },
+    "No Text" : {
+
+    },
+    "None" : {
+
+    },
+    "Nr. of columns in grid" : {
+
+    },
+    "Numbers" : {
+
+    },
+    "Numbers and names" : {
+
+    },
+    "Numbers and Names" : {
+
+    },
+    "One" : {
+
+    },
+    "Open System Settings → Displays…" : {
+
+    },
+    "Open System Settings → Mission Control Shortcuts…" : {
+
+    },
+    "Pill" : {
+
+    },
+    "Preferences…" : {
+
+    },
+    "Previous" : {
+
+    },
+    "Quit Spaceman" : {
+
+    },
+    "Rectangular" : {
+
+    },
+    "Refresh" : {
+
+    },
+    "Refresh spaces in background" : {
+
+    },
+    "Rename" : {
+
+    },
+    "Rename Current Space…" : {
+
+    },
+    "Rename Space %@" : {
+
+    },
+    "Restart space numbering by display" : {
+
+    },
+    "Reverse macOS order" : {
+
+    },
+    "Roughly equal" : {
+
+    },
+    "Rounded" : {
+
+    },
+    "Row Layout" : {
+
+    },
+    "Rows" : {
+
+    },
+    "Sans-Serif" : {
+
+    },
+    "Serif" : {
+
+    },
+    "Short" : {
+
+    },
+    "Shortcut for manual refresh" : {
+
+    },
+    "Shortcut to open preferences window" : {
+
+    },
+    "Shortcut to rename current space" : {
+
+    },
+    "Shortcut to switch to space above" : {
+
+    },
+    "Shortcut to switch to space below" : {
+
+    },
+    "Shortcut to switch to previous space" : {
+
+    },
+    "Show bottom display first" : {
+
+    },
+    "Show fullscreen spaces" : {
+
+    },
+    "Show HUD when switching spaces" : {
+
+    },
+    "Show main display only" : {
+
+    },
+    "Show Mission Control button" : {
+
+    },
+    "Show navigation arrows" : {
+
+    },
+    "Show space names in Mission Control" : {
+
+    },
+    "Show space numbers" : {
+
+    },
+    "Show top display first" : {
+
+    },
+    "Single Row" : {
+
+    },
+    "Space name" : {
+
+    },
+    "Spaceman" : {
+
+    },
+    "Spaceman Preferences" : {
+
+    },
+    "Spaceman reads the Mission Control keyboard shortcuts directly from your system settings. To change them, use this button." : {
+
+    },
+    "Spaceman will attempt to unshrink the menu bar icon when you switch spaces, or trigger a manual refresh." : {
+
+    },
+    "Spaces" : {
+
+    },
+    "Spaces shown" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show"
+          }
+        }
+      }
+    },
+    "Switching Spaces" : {
+
+    },
+    "System Settings…" : {
+
+    },
+    "Tab:About" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About"
+          }
+        }
+      }
+    },
+    "Tab:Appearance" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appearance"
+          }
+        }
+      }
+    },
+    "Tab:Displays" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Displays"
+          }
+        }
+      }
+    },
+    "Tab:General" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "General"
+          }
+        }
+      }
+    },
+    "Tab:Spaces" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spaces"
+          }
+        }
+      }
+    },
+    "Tab:Switching" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switching"
+          }
+        }
+      }
+    },
+    "Two Rows, by Columns" : {
+
+    },
+    "Two Rows, by Rows" : {
+
+    },
+    "Two, by cols" : {
+
+    },
+    "Two, by rows" : {
+
+    },
+    "Use App Name" : {
+
+    },
+    "Use color" : {
+
+    },
+    "Use fast animations (same display only)" : {
+
+    },
+    "Use instant switching (same display only)" : {
+
+    },
+    "Use macOS order" : {
+
+    },
+    "Use smooth transitions" : {
+
+    },
+    "Variable" : {
+
+    },
+    "Variable width" : {
+
+    },
+    "Version %@" : {
+
+    },
+    "When displays are side by side" : {
+
+    },
+    "When displays are stacked" : {
+
+    },
+    "When switching spaces, the icon may blink briefly." : {
+
+    },
+    "You are free to choose any shortcut key you like." : {
+
+    },
+    "Spaceman is not ready yet" : {
+
+    },
+    "Expected a space number or name" : {
+
+    },
+    "Space not found: %@" : {
+
+    },
+    "Space cannot be reached: %@" : {
+
+    },
+    "There is no space in that direction" : {
+
+    },
+    "There is no previous space to switch to" : {
+
+    }
+  },
+  "version" : "1.1"
+}

@@ -1,0 +1,16 @@
+.DS_Store
+.claude/
+
+# Build artifacts
+localbuild/
+DerivedData/
+*.xcarchive
+*.dmg
+
+# Xcode user data
+xcuserdata/
+*.xcuserstate
+
+# Swift Package Manager
+.build/
+.swiftpm/

@@ -1,0 +1,514 @@
+//
+//  AppDelegate.swift
+//  Spaceman
+//
+//  Created by Sasindu Jayasinghe on 23/11/20.
+//
+
+import SwiftUI
+import KeyboardShortcuts
+import OSLog
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+
+    @AppStorage("showHUD") private var showHUD = false
+    @AppStorage("autoRefreshSpaces") private var autoRefreshSpaces = false
+    @AppStorage("autoShrink") private var autoShrink = true
+    @AppStorage("mainDisplayOnly") private var mainDisplayOnly = false
+
+    private var iconCreator: IconCreator!
+    private var statusBar: StatusBar!
+    private var spaceObserver: SpaceObserver!
+    private var hudPanel = HUDPanel()
+    private var missionControlLabels: MissionControlLabels?
+    private var autoRefreshTimer: Timer?
+    private(set) var currentSpaces: [Space] = []
+    private var previousSpaceID: String?
+
+    // Fit-to-width state
+    private var fittedSize: IconSize?   // nil = the user's chosen size
+    private var budget: CGFloat?        // measured room for the icon, nil = unknown
+    private var lastIconWidth: CGFloat = 0
+    private var lastSpaces: [Space] = []
+    private var occlusionObserver: NSObjectProtocol?
+    private var suppressOcclusionUntil: Date = .distantPast
+
+    static var activeSpaceIDs: Set<String> = []
+
+    /// The running instance, for AppleScript commands. NSApp.delegate is the
+    /// SwiftUI adaptor, so it cannot be cast to AppDelegate.
+    private(set) static weak var shared: AppDelegate?
+
+    /// Whether this process is hosting the unit tests.
+    static let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
+    func applicationDidFinishLaunching(_ aNotification: Notification) {
+        AppDelegate.shared = self
+
+        iconCreator = IconCreator()
+
+        statusBar = StatusBar()
+        statusBar.iconCreator = iconCreator
+
+        spaceObserver = SpaceObserver()
+        spaceObserver.delegate = self
+        spaceObserver.updateSpaceInformation()
+
+        // Not as the unit tests' host: it would record the screen, which a test build, signed apart from
+        // the installed app, has to ask permission for each run.
+        if !Self.isTestHost { missionControlLabels = MissionControlLabels() }
+
+        NSApp.activate(ignoringOtherApps: true)
+        registerKeyboardShortcuts()
+
+        // Listen for AppleScript "open preferences" notification
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openPreferencesFromScript),
+            name: NSNotification.Name("OpenPreferences"),
+            object: nil)
+
+        // Fit-to-width: set up occlusion observer after a short delay
+        // (the status bar window may not exist yet at launch)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.setupOcclusionObserver()
+            self.shrinkIfEvicted()
+        }
+
+        // Auto-refresh timer — lives here so it survives the preferences window closing.
+        if autoRefreshSpaces { startAutoRefreshTimer() }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(autoRefreshSettingChanged),
+            name: UserDefaults.didChangeNotification,
+            object: nil)
+    }
+
+    private func startAutoRefreshTimer() {
+        autoRefreshTimer?.invalidate()
+        autoRefreshTimer = Timer.scheduledTimer(
+            withTimeInterval: 5, repeats: true) { _ in
+            NotificationCenter.default.post(name: autoRefreshTriggeredName, object: nil)
+        }
+    }
+
+    private func stopAutoRefreshTimer() {
+        autoRefreshTimer?.invalidate()
+        autoRefreshTimer = nil
+    }
+
+    @objc private func autoRefreshSettingChanged() {
+        if autoRefreshSpaces && autoRefreshTimer == nil {
+            startAutoRefreshTimer()
+        } else if !autoRefreshSpaces && autoRefreshTimer != nil {
+            stopAutoRefreshTimer()
+        }
+    }
+
+    func applicationWillTerminate(_ aNotification: Notification) {
+        // Insert code here to tear down your application
+    }
+
+    // MARK: - Public Methods for Scripts/Shortcuts
+    public func showPreferencesWindow() {
+        statusBar.showPreferencesWindow(self)
+    }
+
+    @objc private func openPreferencesFromScript() {
+        statusBar.showPreferencesWindow(self)
+    }
+
+    private func registerKeyboardShortcuts() {
+        KeyboardShortcuts.onKeyUp(for: .refresh) {
+            postSettingsChanged()
+        }
+        KeyboardShortcuts.onKeyUp(for: .preferences) { [weak self] in
+            guard let self = self else { return }
+            self.statusBar.showPreferencesWindow(self)
+        }
+        KeyboardShortcuts.onKeyUp(for: .quickRename) { [weak self] in
+            self?.statusBar.showQuickRenamePanel()
+        }
+        KeyboardShortcuts.onKeyUp(for: .switchUp) { [weak self] in
+            self?.statusBar.switchVertical(direction: -1)
+        }
+        KeyboardShortcuts.onKeyUp(for: .switchDown) { [weak self] in
+            self?.statusBar.switchVertical(direction: 1)
+        }
+        KeyboardShortcuts.onKeyUp(for: .switchBack) { [weak self] in
+            self?.switchToPreviousSpace()
+        }
+    }
+
+    /// Switch to the space that was current before this one.
+    /// Returns false when there is no previous space or it cannot be reached.
+    @discardableResult
+    func switchToPreviousSpace(mode: SwitchingMode? = nil) -> Bool {
+        guard let targetSpaceID = previousSpaceID,
+              let targetSpace = currentSpaces.first(where: { $0.spaceID == targetSpaceID }),
+              !targetSpace.isCurrentSpace else {
+            return false
+        }
+        return statusBar.switchToSpaceByID(targetSpaceID, mode: mode)
+    }
+
+    // MARK: - AppleScript Commands
+
+    /// Switch to a space resolved from the complete (unfiltered) space list.
+    func scriptSwitch(to space: Space, mode: SwitchingMode?) -> Bool {
+        statusBar.switchToSpaceByID(space.spaceID, mode: mode, spaces: currentSpaces)
+    }
+
+    func scriptSwitchRelative(goRight: Bool, mode: SwitchingMode?) -> Bool {
+        statusBar.switchRelative(goRight: goRight, mode: mode)
+    }
+
+    func scriptSwitchVertical(direction: Int, mode: SwitchingMode?) -> Bool {
+        statusBar.switchVertical(direction: direction, mode: mode)
+    }
+
+    // MARK: - AppleScript Properties
+
+    func application(_ sender: NSApplication, delegateHandlesKey key: String) -> Bool {
+        return key == "currentSpaceNumber" || key == "currentSpaceName"
+            || key == "displayCount" || key == "currentDisplayNumber"
+            || key == "spaceNames"
+    }
+
+    @objc var spaceNames: [String] {
+        return currentSpaces.map { $0.spaceName }
+    }
+
+    @objc var currentSpaceNumber: Int {
+        return currentSpaceOnFrontmostDisplay()?.spaceNumber ?? 0
+    }
+
+    @objc var currentSpaceName: String {
+        return currentSpaceOnFrontmostDisplay()?.spaceName ?? ""
+    }
+
+    @objc var displayCount: Int {
+        return orderedDisplayIDs().count
+    }
+
+    @objc var currentDisplayNumber: Int {
+        let displayIDs = orderedDisplayIDs()
+        guard let frontmostDisplayID = frontmostDisplayID() else { return 0 }
+        if let index = displayIDs.firstIndex(of: frontmostDisplayID) {
+            return index + 1
+        }
+        return 0
+    }
+
+    func orderedDisplayIDs() -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        // swiftlint:disable for_where
+        // insert() mutates `seen` as a side effect; `where` can't do that
+        for space in currentSpaces {
+            if seen.insert(space.displayID).inserted {
+                result.append(space.displayID)
+            }
+        }
+        // swiftlint:enable for_where
+        return result
+    }
+
+    private func frontmostDisplayID() -> String? {
+        guard let mainScreen = NSScreen.main,
+              let screenNumber = mainScreen.deviceDescription[
+                  NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+        else { return nil }
+        let mainCGDisplayID = CGDirectDisplayID(screenNumber.uint32Value)
+        for displayID in orderedDisplayIDs() {
+            let uuid = CFUUIDCreateFromString(kCFAllocatorDefault, displayID as CFString)
+            if CGDisplayGetDisplayIDFromUUID(uuid) == mainCGDisplayID {
+                return displayID
+            }
+        }
+        return nil
+    }
+
+    private func currentSpaceOnFrontmostDisplay() -> Space? {
+        let activeSpaces = currentSpaces.filter { $0.isCurrentSpace }
+        guard !activeSpaces.isEmpty else { return nil }
+        if activeSpaces.count == 1 { return activeSpaces.first }
+
+        if let displayID = frontmostDisplayID() {
+            return activeSpaces.first { $0.displayID == displayID }
+        }
+
+        return activeSpaces.first
+    }
+
+    // MARK: - Fit-to-width
+    //
+    // The menu bar has a fixed amount of room to the left of the status item,
+    // and macOS simply hides an item that does not fit. Fit-to-width measures
+    // that room and renders the largest icon size that fits inside it, so the
+    // space names are always shown in full. The text style, row layout and
+    // names are never changed - only the size.
+    //
+    // The budget is the distance from the right edge of our own status item
+    // to the left edge of the usable menu bar area (right of the notch on
+    // notched Macs). Items to our right keep their positions when our item
+    // changes width, so this measurement is stable.
+    //
+    // Occlusion is kept only as a backstop for the first render, before the
+    // status item window exists and a measurement is possible.
+
+    private static let fitLog = Logger(
+        subsystem: Constants.AppInfo.bundleId, category: "fit")
+
+    /// The user's chosen icon size, read fresh from UserDefaults because
+    /// @AppStorage on an NSObject does not observe writes from Preferences.
+    private var userIconSize: IconSize {
+        guard let raw = UserDefaults.standard.object(forKey: "iconSize") as? Int,
+              let size = IconSize(rawValue: raw) else { return .medium }
+        return size
+    }
+
+    private var isTwoRowLayout: Bool {
+        let raw = UserDefaults.standard.integer(forKey: "rowLayout")
+        return (RowLayout(rawValue: raw) ?? .singleRow).isTwoRows
+    }
+
+    /// The widest the icon may be before macOS hides the status item: the gap
+    /// between our item's right edge and the start of the usable menu bar.
+    /// Returns nil while the item is hidden or not yet placed, because the
+    /// window frame is only meaningful for a visible item.
+    private func measureBudget() -> CGFloat? {
+        guard let window = statusBar.statusBarWindow(),
+              statusBar.isIconVisible() else { return nil }
+        let screen = window.screen ?? NSScreen.main
+        guard let screen = screen else { return nil }
+        let leftBound = screen.auxiliaryTopRightArea?.minX ?? screen.frame.minX
+        let budget = window.frame.maxX - leftBound
+        return budget > 0 ? budget : nil
+    }
+
+    /// Renders the status bar icon at the largest size that fits the budget.
+    private func renderIcon(for spaces: [Space]) {
+        // After setting a new image, macOS may briefly report the item as
+        // occluded. Only the first-render backstop consults occlusion.
+        suppressOcclusionUntil = Date().addingTimeInterval(1.0)
+
+        // Filter to main display when enabled
+        let displaySpaces: [Space]
+        if mainDisplayOnly,
+           let mainID = Self.mainDisplayID(from: spaces) {
+            displaySpaces = spaces.filter { $0.displayID == mainID }
+        } else {
+            displaySpaces = spaces
+        }
+
+        if let measured = measureBudget() { budget = measured }
+
+        let buttonAppearance = statusBar.getButtonAppearance()
+
+        let size: IconSize
+        let icon: NSImage
+        if autoShrink {
+            let fitted = Self.fitIcon(
+                userSize: userIconSize, fittedSize: fittedSize,
+                budget: budget, twoRows: isTwoRowLayout
+            ) { candidateSize in
+                self.iconCreator.getIcon(for: displaySpaces, appearance: buttonAppearance,
+                                         sizeOverride: candidateSize)
+            }
+            if let budget = budget {
+                Self.fitLog.log("""
+                    fit: budget=\(Int(budget)) width=\(Int(fitted.icon.size.width)) \
+                    size=\(fitted.size.rawValue) user=\(self.userIconSize.rawValue)
+                    """)
+            }
+            fittedSize = fitted.size == userIconSize ? nil : fitted.size
+            size = fitted.size
+            icon = fitted.icon
+        } else {
+            // Auto-shrink disabled: always use the user's chosen size
+            size = userIconSize
+            icon = iconCreator.getIcon(for: displaySpaces, appearance: buttonAppearance,
+                                        sizeOverride: size)
+            fittedSize = nil
+        }
+        lastIconWidth = icon.size.width
+
+        statusBar.updateStatusBar(withIcon: icon, withSpaces: displaySpaces)
+
+        if occlusionObserver == nil {
+            setupOcclusionObserver()
+        }
+
+        // Re-check once the item has been laid out: on the first render no
+        // measurement was possible yet, and a measured budget can be too
+        // generous if another item sits to our left.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self] in
+            self?.shrinkIfEvicted()
+        }
+    }
+
+    /// Observes the status bar window's occlusion state. When macOS hides the
+    /// icon (e.g., not enough room), this triggers shrinkIfEvicted().
+    private func setupOcclusionObserver() {
+        guard occlusionObserver == nil,
+              let window = statusBar.statusBarWindow() else { return }
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.shrinkIfEvicted()
+        }
+    }
+
+    /// Backstop: the item is hidden, so whatever we rendered was too wide.
+    /// Tighten the budget below that width and re-render, which picks the
+    /// largest size that fits underneath it. Never changes the text.
+    private func shrinkIfEvicted() {
+        guard autoShrink,
+              !statusBar.isIconVisible(),
+              Date() >= suppressOcclusionUntil else { return }
+
+        switch Self.evictionResponse(
+            budget: budget, lastIconWidth: lastIconWidth,
+            fittedSize: fittedSize, userSize: userIconSize, twoRows: isTwoRowLayout) {
+        case .stepDown(let smaller):
+            fittedSize = smaller
+            budget = nil
+            Self.fitLog.log("evicted: stepping down to size=\(smaller.rawValue)")
+        case .tightenBudget(let ceiling):
+            budget = ceiling
+            Self.fitLog.log("evicted: budget tightened to \(Int(ceiling))")
+        case .giveUp:
+            return
+        }
+        renderIcon(for: lastSpaces)
+    }
+
+    // MARK: - Fit-to-width decisions (pure, for testability)
+
+    /// Renders the largest size that fits `budget`, stepping down from the start size.
+    /// With a measured budget, start from the user's size every time so the icon
+    /// grows back when room frees up. Without one, keep the size the occlusion
+    /// backstop settled on and don't shrink further.
+    static func fitIcon(
+        userSize: IconSize, fittedSize: IconSize?, budget: CGFloat?, twoRows: Bool,
+        render: (IconSize) -> NSImage
+    ) -> (size: IconSize, icon: NSImage) {
+        var currentSize = budget == nil ? (fittedSize ?? userSize) : userSize
+        var currentIcon = render(currentSize)
+        if let budget = budget {
+            while currentIcon.size.width > budget,
+                  let smaller = currentSize.nextSmaller(twoRows: twoRows) {
+                currentSize = smaller
+                currentIcon = render(currentSize)
+            }
+        }
+        return (currentSize, currentIcon)
+    }
+
+    enum EvictionResponse: Equatable {
+        /// Re-render under a budget just below the width that was hidden.
+        case tightenBudget(CGFloat)
+        /// Already budgeted below that width and still hidden: step the size
+        /// down directly so we keep making progress.
+        case stepDown(IconSize)
+        /// Already at the smallest size; nothing more to try.
+        case giveUp
+    }
+
+    /// Backstop decision when the item is hidden after rendering `lastIconWidth`.
+    static func evictionResponse(
+        budget: CGFloat?, lastIconWidth: CGFloat,
+        fittedSize: IconSize?, userSize: IconSize, twoRows: Bool
+    ) -> EvictionResponse {
+        let ceiling = lastIconWidth - 1
+        guard let current = budget, current <= ceiling else {
+            return .tightenBudget(ceiling)
+        }
+        guard let smaller = (fittedSize ?? userSize).nextSmaller(twoRows: twoRows) else {
+            return .giveUp
+        }
+        return .stepDown(smaller)
+    }
+
+    /// The display UUID of the main display (menu bar).
+    private static func mainDisplayID(
+        from spaces: [Space]
+    ) -> String? {
+        let mainCGID = CGMainDisplayID()
+        let displayIDs = Set(spaces.map { $0.displayID })
+        for displayID in displayIDs {
+            guard let uuid = CFUUIDCreateFromString(
+                kCFAllocatorDefault,
+                displayID as CFString)
+            else { continue }
+            if CGDisplayGetDisplayIDFromUUID(uuid)
+                == mainCGID {
+                return displayID
+            }
+        }
+        return nil
+    }
+}
+
+extension AppDelegate: SpaceObserverDelegate {
+    func didUpdateSpaces(spaces: [Space], trigger: SpaceUpdateTrigger) {
+        // Track the previous active space - only when the space actually changes
+        let oldCurrent = currentSpaces.first(where: { $0.isCurrentSpace })
+        let newCurrent = spaces.first(where: { $0.isCurrentSpace })
+        if let oldSpace = oldCurrent, let newSpace = newCurrent, oldSpace.spaceID != newSpace.spaceID {
+            previousSpaceID = oldSpace.spaceID
+        }
+
+        currentSpaces = spaces
+
+        if let displayID = HUDPanel.targetDisplayID(
+            spaces: spaces, previousSpaces: lastSpaces,
+            trigger: trigger, showHUD: showHUD),
+           let screen = HUDPanel.screen(forDisplayID: displayID) {
+            let displaySpaces = spaces.filter { $0.displayID == displayID && !$0.isFullScreen }
+            hudPanel.show(spaces: displaySpaces, on: screen)
+        }
+
+        statusBar.reloadShortcuts()
+        lastSpaces = spaces
+
+        // Re-measure the available room when the environment may have
+        // changed, so the icon grows back if space freed up.
+        if trigger.resetsFittedSize {
+            fittedSize = nil
+            budget = nil
+        }
+
+        renderIcon(for: spaces)
+
+        AppDelegate.activeSpaceIDs = Set(spaces.map { $0.spaceID })
+        NotificationCenter.default.post(name: NSNotification.Name("ActiveSpacesChanged"), object: nil)
+    }
+}
+
+@main
+struct SpacemanApp: App {
+
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
+    init() {
+        if !AppDelegate.isTestHost { UpstreamSettingsImport.run() }
+    }
+
+    var body: some Scene {
+        Settings {
+            SettingsView()
+        }
+        .defaultLaunchBehavior(.suppressed)
+    }
+}
+
+struct SettingsView: View {
+    @StateObject private var tabState = PreferencesTabState()
+    var body: some View {
+        PreferencesView(tabState: tabState)
+    }
+}
