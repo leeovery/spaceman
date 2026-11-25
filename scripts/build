@@ -2,10 +2,11 @@
 # Builds Spaceman at the project's version, signed with this Mac's Developer ID,
 # installs it to /Applications over the one there and starts it, replacing
 # the one running: scripts/bundle builds it, then press sign --dev signs it as
-# .press.toml says, with no timestamp, so it builds offline. The signature is
+# .press.toml says, with no timestamp, so signing needs no network. The signature is
 # the same from build to build and release to release, so macOS keeps
 # Spaceman's permissions. It isn't notarised: a build installed from here is
-# never quarantined. `brew reinstall --cask spaceman` puts the release back.
+# never quarantined. `brew reinstall --cask leeovery/tools/spaceman` puts the
+# release back.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -17,6 +18,10 @@ identifier=com.leeovery.Spaceman
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 version=$(sed -n 's/.*MARKETING_VERSION = \(.*\);/\1/p' Spaceman.xcodeproj/project.pbxproj | head -n 1)
+if [[ -z $version ]]; then
+  echo "No MARKETING_VERSION in Spaceman.xcodeproj/project.pbxproj: nothing built." >&2
+  exit 1
+fi
 scripts/bundle "$work/out" "$version" "$work/temp"
 press sign --dev "$work/out"
 
@@ -25,6 +30,12 @@ if [[ $got != "$identifier" ]]; then
   echo "The build is named $got, not $identifier: $installed left as it is." >&2
   exit 1
 fi
+
+# Copied in beside the old one before Spaceman is stopped, so a failed copy
+# leaves the installed Spaceman as it was, and the swap itself is a rename.
+staged=$(mktemp -d /Applications/.Spaceman.XXXXXX)
+trap 'rm -rf "$work" "$staged"' EXIT
+ditto "$work/out/Spaceman.app" "$staged/Spaceman.app"
 
 # Quit by a signal: asking by an Apple Event would itself need leave to
 # control Spaceman.
@@ -40,13 +51,13 @@ if pkill -U "$UID" -x Spaceman; then
 fi
 
 rm -rf "$installed"
-ditto "$work/out/Spaceman.app" "$installed"
+mv "$staged/Spaceman.app" "$installed"
 
 # An open straight after a bundle is moved in has failed with LaunchServices'
 # -600, so it is tried three times, a second apart.
 for try in 1 2 3; do
   if open "$installed"; then
-    echo "Spaceman $version installed to $installed; brew reinstall --cask spaceman puts the release back"
+    echo "Spaceman $version installed to $installed; brew reinstall --cask leeovery/tools/spaceman puts the release back"
     exit 0
   fi
   [[ $try -eq 3 ]] || sleep 1
