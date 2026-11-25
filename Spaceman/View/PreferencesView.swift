@@ -471,7 +471,10 @@ struct PreferencesView: View {
             labelStylePicker
                 .padding(.leading, subItemIndent)
                 .disabled(!showMissionControlLabels)
-            if needsScreenRecording {
+            if nativeLookIsUnavailable {
+                nativeLookUnavailableNote
+                    .padding(.leading, subItemIndent)
+            } else if needsScreenRecording {
                 screenRecordingNote
                     .padding(.leading, subItemIndent)
             }
@@ -501,19 +504,33 @@ struct PreferencesView: View {
     private var needsScreenRecording: Bool {
         MissionControlLabelStyle.needsScreenRecording(
             namesShown: showMissionControlLabels, chosen: labelStyle,
+            nativeLookAvailable: MissionControlLabelStyle.nativeLookIsAvailable,
             screenRecordingGranted: CGPreflightScreenCaptureAccess())
+    }
+
+    /// macOS 27 moved the Spaces Bar out of the Dock, where the native look captures it.
+    private var nativeLookIsUnavailable: Bool {
+        showMissionControlLabels && labelStyle == .nativeLook && !MissionControlLabelStyle.nativeLookIsAvailable
     }
 
     private func requestScreenRecordingIfNeeded() {
         if needsScreenRecording { CGRequestScreenCaptureAccess() }
     }
 
+    private var nativeLookUnavailableNote: some View {
+        noteText("The native look needs macOS 26. Labels use space colors on this version.")
+    }
+
+    private func noteText(_ text: LocalizedStringKey) -> some View {
+        Text(text)
+            .font(.callout)
+            .foregroundColor(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var screenRecordingNote: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("The native look needs Screen Recording permission. Restart Spaceman after allowing it.")
-                .font(.callout)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            noteText("The native look needs Screen Recording permission. Restart Spaceman after allowing it.")
             Button("Open System Settings → Screen Recording…") {
                 openScreenRecordingSettings()
             }

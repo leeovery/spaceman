@@ -26,32 +26,46 @@ enum MissionControlLabelStyle: String, CaseIterable {
         defaults.string(forKey: defaultsKey).flatMap(Self.init(rawValue:)) ?? .nativeLook
     }
 
-    /// The style labels are drawn in: the native look needs Screen Recording, which macOS only
-    /// reports granted to a relaunched app, so until then they are drawn in the spaces' colours.
+    /// Whether the native look can apply on this macOS: it captures the Dock's Spaces Bar, which macOS 27
+    /// moved to WindowManager.
+    static var nativeLookIsAvailable: Bool { MissionControlLabels.spacesBarIsInDock }
+
+    /// The style labels are drawn in: the native look only where it is available and Screen Recording is
+    /// granted, which macOS only reports to a relaunched app. Otherwise the spaces' colours.
     static func effective(
-        chosen: MissionControlLabelStyle, screenRecordingGranted: Bool
+        chosen: MissionControlLabelStyle, nativeLookAvailable: Bool, screenRecordingGranted: Bool
     ) -> MissionControlLabelStyle {
-        chosen == .nativeLook && screenRecordingGranted ? .nativeLook : .spaceColors
+        chosen == .nativeLook && nativeLookAvailable && screenRecordingGranted ? .nativeLook : .spaceColors
     }
 
-    /// The style labels are drawn in now.
-    static var current: MissionControlLabelStyle {
-        effective(chosen: chosen(), screenRecordingGranted: CGPreflightScreenCaptureAccess())
+    /// The style labels are drawn in now, from the stored settings.
+    static func current(
+        in defaults: UserDefaults = .standard,
+        nativeLookAvailable: Bool = nativeLookIsAvailable,
+        screenRecordingGranted: Bool = CGPreflightScreenCaptureAccess()
+    ) -> MissionControlLabelStyle {
+        effective(
+            chosen: chosen(in: defaults), nativeLookAvailable: nativeLookAvailable,
+            screenRecordingGranted: screenRecordingGranted)
     }
 
-    /// Whether to ask for Screen Recording: only while the labels are shown in the native look, and
-    /// only while it is missing.
+    /// Whether to ask for Screen Recording: only while the labels are shown in the native look where it
+    /// is available, and only while it is missing.
     static func needsScreenRecording(
-        namesShown: Bool, chosen: MissionControlLabelStyle, screenRecordingGranted: Bool
+        namesShown: Bool, chosen: MissionControlLabelStyle, nativeLookAvailable: Bool, screenRecordingGranted: Bool
     ) -> Bool {
-        namesShown && chosen == .nativeLook && !screenRecordingGranted
+        namesShown && chosen == .nativeLook && nativeLookAvailable && !screenRecordingGranted
     }
 
     /// Whether to ask for Screen Recording now, from the stored settings.
-    static var needsScreenRecordingNow: Bool {
+    static func needsScreenRecordingNow(
+        in defaults: UserDefaults = .standard,
+        nativeLookAvailable: Bool = nativeLookIsAvailable,
+        screenRecordingGranted: Bool = CGPreflightScreenCaptureAccess()
+    ) -> Bool {
         needsScreenRecording(
-            namesShown: UserDefaults.standard.bool(forKey: namesShownKey), chosen: chosen(),
-            screenRecordingGranted: CGPreflightScreenCaptureAccess())
+            namesShown: defaults.bool(forKey: namesShownKey), chosen: chosen(in: defaults),
+            nativeLookAvailable: nativeLookAvailable, screenRecordingGranted: screenRecordingGranted)
     }
 
     /// Starts the style from the hidden default it replaced, once: colours if the native look was

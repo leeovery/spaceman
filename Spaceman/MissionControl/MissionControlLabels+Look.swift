@@ -12,8 +12,7 @@ extension MissionControlLabels {
 
     /// Asks, once per launch, for the Screen Recording permission the native look needs.
     func requestCaptureAccessIfNeeded() {
-        guard Self.spacesBarIsInDock, !requestedCaptureAccess, MissionControlLabelStyle.needsScreenRecordingNow
-        else { return }
+        guard !requestedCaptureAccess, MissionControlLabelStyle.needsScreenRecordingNow() else { return }
         requestedCaptureAccess = true
         Self.log.log("Asking for Screen Recording, to match Mission Control's captions")
         CGRequestScreenCaptureAccess()
@@ -23,7 +22,7 @@ extension MissionControlLabels {
     /// looks captured over another background are dropped, so the native captions show until they are
     /// captured again.
     func beginLookSession() {
-        labelStyle = MissionControlLabelStyle.current
+        labelStyle = MissionControlLabelStyle.current()
         restingSignature = nil
         capturedSignature = nil
         captureAttempts = [:]

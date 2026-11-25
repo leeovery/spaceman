@@ -29,31 +29,72 @@ final class MissionControlLabelStyleTests: XCTestCase {
 
     // MARK: - Effective style
 
+    private func effective(
+        _ chosen: MissionControlLabelStyle, available: Bool = true, granted: Bool
+    ) -> MissionControlLabelStyle {
+        MissionControlLabelStyle.effective(
+            chosen: chosen, nativeLookAvailable: available, screenRecordingGranted: granted)
+    }
+
     func testNativeLookWithScreenRecordingIsDrawnNative() {
-        XCTAssertEqual(
-            MissionControlLabelStyle.effective(chosen: .nativeLook, screenRecordingGranted: true), .nativeLook)
+        XCTAssertEqual(effective(.nativeLook, granted: true), .nativeLook)
     }
 
     func testNativeLookWithoutScreenRecordingIsDrawnInSpaceColors() {
-        XCTAssertEqual(
-            MissionControlLabelStyle.effective(chosen: .nativeLook, screenRecordingGranted: false), .spaceColors)
+        XCTAssertEqual(effective(.nativeLook, granted: false), .spaceColors)
+    }
+
+    func testNativeLookWhereUnavailableIsDrawnInSpaceColorsWhateverTheGrant() {
+        for granted in [true, false] {
+            XCTAssertEqual(effective(.nativeLook, available: false, granted: granted), .spaceColors)
+        }
     }
 
     func testSpaceColorsAreDrawnInSpaceColorsWhateverTheGrant() {
         for granted in [true, false] {
-            XCTAssertEqual(
-                MissionControlLabelStyle.effective(chosen: .spaceColors, screenRecordingGranted: granted),
-                .spaceColors)
+            XCTAssertEqual(effective(.spaceColors, granted: granted), .spaceColors)
         }
+    }
+
+    func testCurrentStyleReadsTheStoredStyle() {
+        defaults.set(MissionControlLabelStyle.spaceColors.rawValue, forKey: MissionControlLabelStyle.defaultsKey)
+        XCTAssertEqual(
+            MissionControlLabelStyle.current(in: defaults, nativeLookAvailable: true, screenRecordingGranted: true),
+            .spaceColors)
+        defaults.set(MissionControlLabelStyle.nativeLook.rawValue, forKey: MissionControlLabelStyle.defaultsKey)
+        XCTAssertEqual(
+            MissionControlLabelStyle.current(in: defaults, nativeLookAvailable: true, screenRecordingGranted: true),
+            .nativeLook)
     }
 
     // MARK: - Asking for Screen Recording
 
     private func needsScreenRecording(
-        namesShown: Bool = true, chosen: MissionControlLabelStyle, granted: Bool
+        namesShown: Bool = true, chosen: MissionControlLabelStyle, available: Bool = true, granted: Bool
     ) -> Bool {
         MissionControlLabelStyle.needsScreenRecording(
-            namesShown: namesShown, chosen: chosen, screenRecordingGranted: granted)
+            namesShown: namesShown, chosen: chosen, nativeLookAvailable: available, screenRecordingGranted: granted)
+    }
+
+    func testScreenRecordingIsNeverAskedForWhereTheNativeLookIsUnavailable() {
+        for chosen in MissionControlLabelStyle.allCases {
+            for granted in [true, false] {
+                XCTAssertFalse(needsScreenRecording(chosen: chosen, available: false, granted: granted))
+            }
+        }
+    }
+
+    private func needsScreenRecordingNow() -> Bool {
+        MissionControlLabelStyle.needsScreenRecordingNow(
+            in: defaults, nativeLookAvailable: true, screenRecordingGranted: false)
+    }
+
+    func testScreenRecordingNowReadsTheNamesShownAndStyleSettings() {
+        XCTAssertFalse(needsScreenRecordingNow(), "names are off until turned on")
+        defaults.set(true, forKey: MissionControlLabelStyle.namesShownKey)
+        XCTAssertTrue(needsScreenRecordingNow(), "the style defaults to the native look")
+        defaults.set(MissionControlLabelStyle.spaceColors.rawValue, forKey: MissionControlLabelStyle.defaultsKey)
+        XCTAssertFalse(needsScreenRecordingNow())
     }
 
     func testScreenRecordingIsAskedForOnlyForTheNativeLookWithoutIt() {

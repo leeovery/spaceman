@@ -48,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func askForMissingPermissions() {
         let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         _ = AXIsProcessTrustedWithOptions([prompt: true] as CFDictionary)
-        if MissionControlLabelStyle.needsScreenRecordingNow { CGRequestScreenCaptureAccess() }
+        if MissionControlLabelStyle.needsScreenRecordingNow() { CGRequestScreenCaptureAccess() }
     }
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
