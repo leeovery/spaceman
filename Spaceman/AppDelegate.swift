@@ -42,6 +42,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Whether this process is hosting the unit tests.
     static let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
+    /// Asks for what switching and the Mission Control labels need. Asked from here, the grant is recorded
+    /// against this app: added by hand, System Settings recorded it against the upstream Spaceman instead.
+    private func askForMissingPermissions() {
+        let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        _ = AXIsProcessTrustedWithOptions([prompt: true] as CFDictionary)
+        if !CGPreflightScreenCaptureAccess() { CGRequestScreenCaptureAccess() }
+    }
+
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         AppDelegate.shared = self
 
@@ -56,7 +64,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Not as the unit tests' host: it would record the screen, which a test build, signed apart from
         // the installed app, has to ask permission for each run.
-        if !Self.isTestHost { missionControlLabels = MissionControlLabels() }
+        if !Self.isTestHost {
+            askForMissingPermissions()
+            missionControlLabels = MissionControlLabels()
+        }
 
         NSApp.activate(ignoringOtherApps: true)
         registerKeyboardShortcuts()
