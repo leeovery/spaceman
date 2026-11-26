@@ -9,6 +9,11 @@ import AppKit
 
 extension MissionControlLabels {
 
+    /// How long into the grow from the names macOS's own captions under the thumbnails not hovered take to
+    /// fade halfway out, on a magnifying bar: filmed on macOS 26.7 with 16 desktops. Labels never fade:
+    /// theirs go at that halfway point, as a hovered label moves on at the middle of a gap.
+    private static let growCaptionFade: TimeInterval = 0.06
+
     /// Draws every bar's labels with the bar `retraction` of the way off its screen, or moving with
     /// `slide`. The labels stay opaque all the way: a fading label would show the native caption
     /// through it. `selected` gives each bar's current space, as the Dock has it; without it, macOS's
@@ -18,6 +23,7 @@ extension MissionControlLabels {
     ) {
         let matching = labelStyle == .nativeLook
         var labels: [MissionControlLabel] = []
+        var shownByBar: [(bar: BarLayout, shown: ShownLabels)] = []
         for (index, measured) in bars.enumerated() {
             let selectedPlace = index < selected.count ? selected[index] : nil
             // A bar growing into thumbnails is drawn at the thumbnails' places, each label moving there
@@ -34,7 +40,13 @@ extension MissionControlLabels {
                 $0.screen == bar.screen ? $0.slide.earlier(by: clock.frameDuration / 2) : nil
             }
             let offset = barTop - bar.frame.minY
+            let shown = shownLabels(on: bar)
+            shownByBar.append((bar, shown))
+            let ridingGrow = growing.map { frameTime < $0.reference + DockMotion.expand.delay + Self.growCaptionFade }
             for caption in bar.captions {
+                // A label macOS draws no caption for goes; one riding the grow from the names goes once the
+                // caption it covers has half faded.
+                guard shown.shows(caption) || ridingGrow == true else { continue }
                 var centre = CGPoint(x: caption.centre.x, y: caption.centre.y + offset)
                 // Covered by the zoom to another desktop, as the Dock's caption is.
                 if let cover = zoomCover, zoom?.screen == bar.screen, cover.contains(centre) { continue }
@@ -75,13 +87,10 @@ extension MissionControlLabels {
                 label.barHeight = bar.frame.height
                 label.shift = sliding
                 label.grow = moving
-                if let found, let variant {
-                    // A look captured with the bar this height goes as high as the native caption was found,
-                    // whichever thumbnail it was under; one from the bar at another height can only follow
-                    // the Dock's caption.
-                    label.lookOrigin = CGPoint(
-                        x: centre.x + variant.frame.minX,
-                        y: found.sameHeight ? barTop + variant.top : centre.y + variant.frame.minY)
+                if let variant {
+                    // As high as the native caption was found with the bar this height, whichever thumbnail
+                    // it was under.
+                    label.lookOrigin = CGPoint(x: centre.x + variant.frame.minX, y: barTop + variant.top)
                 }
                 if let dropped = droppedSpace, dropped.spaceID == caption.spaceID {
                     traceDropped(caption, label: label, look: found, at: frameTime, since: dropped.time)
@@ -91,8 +100,14 @@ extension MissionControlLabels {
         }
         overlay.render(labels, retraction: retraction, slide: slide, redrawing: drag != nil)
         recordDrawn(at: frameTime)
+        recordShown(shownByBar, at: frameTime)
         if MissionControlCaptionLook.isDebugging { trace(bars.first, labels: labels, retraction: retraction) }
         traceDrag(bars, labels: labels, at: frameTime)
+    }
+
+    /// Which of `bar`'s labels are drawn: on a bar of thumbnails that magnifies, only the hovered one's.
+    func shownLabels(on bar: BarLayout) -> ShownLabels {
+        ShownLabels.on(bar, magnifies: magnification.magnifies(bar), pointer: pointer?.point)
     }
 
     /// Whether `caption`'s space is the current one, which has its pill: the space of the thumbnail the

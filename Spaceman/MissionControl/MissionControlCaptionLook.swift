@@ -158,6 +158,9 @@ enum MissionControlCaptionLook {
     /// such as the bar's edge, and anything taller is not a caption.
     private static let minTextHeight: CGFloat = 5
     private static let maxTextHeight: CGFloat = 22
+    /// The sizes a native caption's text is taken to be between: its name is drawn no smaller or larger.
+    private static let minFontSize: CGFloat = 10
+    private static let maxFontSize: CGFloat = 20
 
     /// Saves each capture, and the labels drawn over it, to Spaceman's caches folder.
     static var isDebugging: Bool {
@@ -379,9 +382,11 @@ enum MissionControlCaptionLook {
                 clusters.append(y...y)
             }
         }
-        guard let cluster = clusters.first(where: { $0.upperBound - $0.lowerBound + 1 >= px(minTextHeight) }) else {
-            return .missed(String(format: "no text %.0fpt tall", minTextHeight))
-        }
+        // Nor is text shorter than the caption's own text at the smallest size a caption is taken to be: a
+        // capture as the thumbnails resize can find a sliver of one where the caption should be.
+        let shortest = max(minTextHeight, inkBounds(of: caption.covers, size: minFontSize).height)
+        guard let cluster = clusters.first(where: { CGFloat($0.upperBound - $0.lowerBound + 1) >= shortest * scale })
+        else { return .missed(String(format: "no text %.1fpt tall", shortest)) }
         guard cluster.upperBound - cluster.lowerBound < px(maxTextHeight) else {
             let height = CGFloat(cluster.upperBound - cluster.lowerBound + 1) / scale
             return .missed(String(format: "lowest text %.1fpt tall, not under %.0f", height, maxTextHeight))
@@ -453,7 +458,7 @@ enum MissionControlCaptionLook {
         let nativeInkWidth = CGFloat(inkRight - inkLeft + 1) / scale
         let reference = inkBounds(of: caption.covers, size: nativeFontSize).width
         let fontSize = reference > 0
-            ? min(max((nativeFontSize * nativeInkWidth / reference * 4).rounded() / 4, 10), 20)
+            ? min(max((nativeFontSize * nativeInkWidth / reference * 4).rounded() / 4, minFontSize), maxFontSize)
             : nativeFontSize
         return .found(Measured(
             caption: caption, inkLeft: inkLeft, inkRight: inkRight, inkTop: inkTop, inkBottom: inkBottom,

@@ -91,8 +91,9 @@ final class DockReader {
     }
 
     /// Asks for a fresh reading unless one is already under way; never waits. `remeasure` allows
-    /// the periodic full measurement, which takes many more AX calls than following the bar.
-    func request(remeasure: Bool) {
+    /// the periodic full measurement, which takes many more AX calls than following the bar. The
+    /// thumbnails of bars `magnification` knows to magnify are followed as they resize.
+    func request(remeasure: Bool, magnification: BarMagnification) {
         condition.lock()
         guard !inFlight else {
             condition.unlock()
@@ -112,7 +113,7 @@ final class DockReader {
             guard let self else { return }
             var fresh = self.read(
                 session: session, screens: screens, dockPID: dockPID, labelsUnnamed: labelsUnnamed,
-                remeasure: remeasure, force: force)
+                remeasure: remeasure, force: force, magnification: magnification)
             fresh.answered = ProcessInfo.processInfo.systemUptime
             fresh.requested = requested
             self.condition.lock()
@@ -125,7 +126,7 @@ final class DockReader {
 
     private func read(
         session: Int, screens: [ScreenInfo], dockPID: pid_t, labelsUnnamed: Bool, remeasure: Bool,
-        force: Bool = false
+        force: Bool, magnification: BarMagnification
     ) -> Reading {
         let now = ProcessInfo.processInfo.systemUptime
         if layoutsSession != session {
@@ -158,7 +159,7 @@ final class DockReader {
                 }
             }
             let due = force || remeasure && now - lastMeasured >= MissionControlLabels.measureInterval
-            guard reshaped || shifted || due else {
+            if !reshaped, !shifted, !due, followMagnifiedThumbnails(magnification) {
                 return Reading(session: session, time: now, layouts: layouts, layoutsVersion: layoutsVersion,
                                barFrame: barFrame, mismatch: mismatch, selected: selected())
             }
@@ -169,6 +170,23 @@ final class DockReader {
         layoutsVersion += 1
         return Reading(session: session, time: now, layouts: layouts, layoutsVersion: layoutsVersion,
                        barFrame: layouts.first?.frame, mismatch: mismatch, selected: selected())
+    }
+
+    /// Re-reads the thumbnails of each bar that magnifies as they resize under the pointer, which moves
+    /// neither the bar nor, away from the strip's ends, its first thumbnail: a call for the list's count and
+    /// one per thumbnail. False, to measure everything, when they can't be read or their number changed.
+    private func followMagnifiedThumbnails(_ magnification: BarMagnification) -> Bool {
+        var changed = false
+        for (index, layout) in layouts.enumerated() where magnification.magnifies(layout) {
+            guard let followed = layout.following(
+                count: layout.list.flatMap(AX.childCount), frames: AX.frames(of: layout.buttons.map(\.element)))
+            else { return false }
+            guard followed.buttons.map(\.frame) != layout.buttons.map(\.frame) else { continue }
+            layouts[index] = followed
+            changed = true
+        }
+        if changed { layoutsVersion += 1 }
+        return true
     }
 
     /// Each bar's selected thumbnail, as the Dock has it: it moves the pill the moment it changes,
@@ -297,6 +315,39 @@ enum AX {
             element, kAXIdentifierAttribute as CFString, &value) == .success
         else { return nil }
         return value as? String
+    }
+
+    static func childCount(of element: AXUIElement) -> Int? {
+        var count: CFIndex = 0
+        guard AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count) == .success
+        else { return nil }
+        return count
+    }
+
+    /// Each element's frame, its position and size read in one call; nil if any can't be read.
+    static func frames(of elements: [AXUIElement]) -> [CGRect]? {
+        let attributes = [kAXPositionAttribute, kAXSizeAttribute] as CFArray
+        var frames: [CGRect] = []
+        frames.reserveCapacity(elements.count)
+        for element in elements {
+            var values: CFArray?
+            guard AXUIElementCopyMultipleAttributeValues(
+                element, attributes, AXCopyMultipleAttributeOptions(rawValue: 0), &values) == .success,
+                  let pair = values as? [AnyObject], pair.count == 2,
+                  let position = value(pair[0], .cgPoint, as: CGPoint.zero),
+                  let size = value(pair[1], .cgSize, as: CGSize.zero), size.width > 0, size.height > 0
+            else { return nil }
+            frames.append(CGRect(origin: position, size: size))
+        }
+        return frames
+    }
+
+    /// `object` as an AX value of `type`; nil for anything else, such as the error a failed read gives.
+    private static func value<Value>(_ object: AnyObject, _ type: AXValueType, as empty: Value) -> Value? {
+        guard CFGetTypeID(object) == AXValueGetTypeID() else { return nil }
+        let axValue = object as! AXValue  // swiftlint:disable:this force_cast
+        var result = empty
+        return AXValueGetType(axValue) == type && AXValueGetValue(axValue, type, &result) ? result : nil
     }
 
     static func position(of element: AXUIElement) -> CGPoint? {

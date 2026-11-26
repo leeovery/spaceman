@@ -89,6 +89,26 @@ struct BarLayout {
         return placed
     }
 
+    /// This layout with its thumbnails at `frames`, re-read as magnified thumbnails resize, and their
+    /// captions moved under them, each as wide as its neighbours now leave room for. Nil, to measure
+    /// everything, when the frames couldn't be read or the bar's list now holds `count` thumbnails, other
+    /// than it did.
+    func following(count: Int?, frames: [CGRect]?) -> BarLayout? {
+        guard count == buttons.count, let frames, frames.count == buttons.count else { return nil }
+        var followed = self
+        followed.buttons = zip(buttons, frames).map { ($0.element, $0.title, $1) }
+        let centres = frames.map(MissionControlLabels.captionCentre(below:))
+        followed.captions = captions.map { caption in
+            guard centres.indices.contains(caption.index) else { return caption }
+            var moved = caption
+            moved.centre = centres[caption.index]
+            moved.maxWidth = MissionControlLabels.labelWidth(
+                at: caption.index, centres: centres, fallbackWidth: frames.first?.width ?? 0)
+            return moved
+        }
+        return followed
+    }
+
     /// This layout with its captions matched afresh from its thumbnails, with the names stored now and
     /// unnamed spaces labelled or not, as a session's style has it.
     func rematched(labelsUnnamed: Bool, storedNames: [String: SpaceNameInfo]) -> BarLayout {

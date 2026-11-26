@@ -307,6 +307,52 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(look.frame.height, 24, accuracy: 0.01)
     }
 
+    /// A 2x capture of a 400x80pt bar with a bright sliver 7pt tall, 62 to 69pt down, as a capture taken while
+    /// magnified thumbnails resize can find where a caption should be; and, with `text`, "Desktop 2" above it
+    /// on a baseline 50pt down.
+    private func barWithSliver(text: Bool) throws -> CGImage {
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: 800, height: 160, bitsPerComponent: 8, bytesPerRow: 800 * 4, space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.scaleBy(x: 2, y: 2)
+        context.setFillColor(cgColor(barColor))
+        context.fill(CGRect(x: 0, y: 0, width: 400, height: 80))
+        context.setFillColor(cgColor(textColor))
+        context.fill(CGRect(x: 270, y: 11, width: 60, height: 7))
+        if text {
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 14),
+                NSAttributedString.Key(kCTForegroundColorAttributeName as String): cgColor(textColor),
+            ]
+            let line = CTLineCreateWithAttributedString(
+                NSAttributedString(string: "Desktop 2", attributes: attributes))
+            let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+            context.textPosition = CGPoint(x: 300 - ink.midX, y: 30)
+            CTLineDraw(line, context)
+        }
+        return try XCTUnwrap(context.makeImage())
+    }
+
+    private let sliverCaption = CaptionToMatch(
+        key: "sliver", centre: CGPoint(x: 300, y: 45), barTop: 0, barBottom: 78, maxWidth: 96, covers: "Desktop 2",
+        name: "Fabric")
+
+    func testASliverShorterThanTheCaptionsTextCouldBeIsNoLook() throws {
+        let matches = MissionControlCaptionLook.matches(
+            in: try barWithSliver(text: false), origin: .zero, scale: 2, captions: [sliverCaption])
+        XCTAssertNil(matches.looks["sliver"])
+        XCTAssertTrue(try XCTUnwrap(matches.misses["sliver"]).hasPrefix("no text"))
+    }
+
+    func testASliverBelowTheCaptionIsPassedOver() throws {
+        let looks = MissionControlCaptionLook.looks(
+            in: try barWithSliver(text: true), origin: .zero, scale: 2, captions: [sliverCaption])
+        let look = try XCTUnwrap(looks["sliver"]?.plain)
+        XCTAssertEqual(look.top, 33, accuracy: 0.01)
+        XCTAssertEqual(look.frame.height, 24, accuracy: 0.01)
+    }
+
     func testCaptionsWithNoTextAreNotMatched() throws {
         XCTAssertNil(try matchSyntheticBar()["empty"])
     }
@@ -405,11 +451,19 @@ final class MissionControlLabelsTests: XCTestCase {
         let result = CaptionLooks.Result(found: try found([mail, code], on: mainBar))
         XCTAssertEqual(looks.finish(capture, result, moved: false), .kept)
         XCTAssertEqual(looks.look(for: mail, on: bar(primary, retraction: 0.5, [mail]))?.exact, true)
-        let expanded = try XCTUnwrap(looks.look(for: mail, on: bar(primary, height: 146, [mail])))
-        XCTAssertFalse(expanded.exact || expanded.sameHeight)
         let moved = try XCTUnwrap(looks.look(for: caption(3, "Mail"), on: mainBar))
         XCTAssertFalse(moved.exact)
-        XCTAssertTrue(moved.sameHeight)
+    }
+
+    /// A names-row look drawn over a thumbnail's caption showed larger text on a darker plate.
+    func testALookCapturedWithTheBarAtAnotherHeightIsNeverUsed() throws {
+        var looks = CaptionLooks()
+        _ = looks.finish(looks.capture(of: [mainBar], attempt: 1),
+                         CaptionLooks.Result(found: try found([mail, code], on: mainBar)), moved: false)
+        let expanded = bar(primary, height: 146, [mail, caption(3, "Mail")])
+        XCTAssertNil(looks.look(for: mail, on: expanded))
+        XCTAssertNil(looks.look(for: caption(3, "Mail"), on: expanded))
+        XCTAssertTrue(looks.lookMayArrive(for: mail, on: expanded))
     }
 
     func testAKeptCaptureRecordsTheBackgroundItWasCapturedOver() throws {
@@ -440,14 +494,14 @@ final class MissionControlLabelsTests: XCTestCase {
     }
 
     /// The draw looks a caption up on the bar as it is, perhaps still sliding in; the capture asked
-    /// about it on the bar at rest.
-    func testACaptionACaptureFoundNoLookForIsSpentWhereverTheBarIs() throws {
+    /// about it on the bar at rest. A capture of the bar at one height says nothing of it at another.
+    func testACaptionACaptureFoundNoLookForIsSpentWhereverTheBarIsAtThatHeight() throws {
         var looks = CaptionLooks()
         let capture = looks.capture(of: [bar(primary, retraction: 0.2, [mail, code])], attempt: 1)
         XCTAssertEqual(looks.finish(capture, CaptionLooks.Result(found: try found([mail], on: mainBar)), moved: false),
                        .kept)
         XCTAssertFalse(looks.lookMayArrive(for: code, on: bar(primary, retraction: 0.7, [mail, code])))
-        XCTAssertFalse(looks.lookMayArrive(for: code, on: bar(primary, height: 146, [mail, code])))
+        XCTAssertTrue(looks.lookMayArrive(for: code, on: bar(primary, height: 146, [mail, code])))
         XCTAssertTrue(looks.lookMayArrive(for: caption(3, "Docs"), on: mainBar))
     }
 
@@ -461,7 +515,6 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(looks.finish(looks.capture(of: [bar(primary, [mail])], attempt: 2), moved, moved: false),
                        .retry)
         XCTAssertEqual(looks.look(for: mail, on: mainBar)?.look.plain?.top, 7.5)
-        XCTAssertEqual(looks.look(for: mail, on: bar(primary, height: 146, [mail]))?.look.plain?.top, 7.5)
         XCTAssertEqual(looks.look(for: caption(3, "Mail"), on: mainBar)?.look.plain?.top, 7.5)
         let agreeing = CaptionLooks.Result(found: [mailKey: try look(top: -1.25)])
         XCTAssertEqual(looks.finish(looks.capture(of: [bar(primary, [mail])], attempt: 3), agreeing, moved: false),
@@ -558,11 +611,8 @@ final class MissionControlLabelsTests: XCTestCase {
     func testDroppingAScreensLooksKeepsTheOtherScreens() {
         let mainKeys = CaptionLooks.keys(bar: mainBar, caption: mail)
         let builtInKeys = CaptionLooks.keys(bar: builtInBar, caption: caption(1, "Notes"))
-        let entries = [
-            mainKeys.exact: 1, mainKeys.anyHeight: 2, mainKeys.name: 3,
-            builtInKeys.exact: 4, builtInKeys.anyHeight: 5, builtInKeys.name: 6,
-        ]
-        XCTAssertEqual(Set(CaptionLooks.dropping(entries, on: [builtInKeys.screen]).values), [1, 2, 3])
+        let entries = [mainKeys.exact: 1, mainKeys.name: 2, builtInKeys.exact: 3, builtInKeys.name: 4]
+        XCTAssertEqual(Set(CaptionLooks.dropping(entries, on: [builtInKeys.screen]).values), [1, 2])
     }
 
     func testLooksCapturedOverAnotherBackgroundAreDropped() throws {
@@ -1017,6 +1067,178 @@ final class MissionControlLabelsTests: XCTestCase {
             MissionControlLabels.captionCentre(below: $0.frame)
         })
         XCTAssertEqual(placed.captions.map(\.maxWidth), [300, 300, 300].map { $0 - MissionControlLabels.labelGap })
+    }
+
+    // MARK: - Magnification
+
+    /// An expanded bar of `count` thumbnails as the Dock reports 16 desktops on a 2560-point screen: 127pt
+    /// wide at a 152pt pitch, those in `widths` resized about their middles, each labelled.
+    private func thumbnailBar(
+        count: Int = 16, height: CGFloat = 146, widths: [Int: CGFloat] = [:], on screen: CGRect? = nil
+    ) -> BarLayout {
+        let screen = screen ?? primary
+        let element = AXUIElementCreateApplication(getpid())
+        let buttons = (0..<count).map { index -> (element: AXUIElement, title: String, frame: CGRect) in
+            let width = widths[index] ?? 127
+            let midX = screen.minX + 100 + CGFloat(index) * 152
+            let thumbnailHeight: CGFloat = height > MissionControlLabels.expandedBarHeight ? 77 : 24
+            return (element, "Desktop \(index + 1)",
+                    CGRect(x: midX - width / 2, y: screen.minY + 8, width: width, height: thumbnailHeight))
+        }
+        let captions = buttons.indices.map { index in
+            Caption(centre: MissionControlLabels.captionCentre(below: buttons[index].frame), maxWidth: 148,
+                    index: index, covers: buttons[index].title, name: "Space \(index + 1)", colorHex: nil,
+                    spaceID: "\(index + 1)")
+        }
+        return BarLayout(
+            bar: nil, firstButton: nil, frame: CGRect(x: screen.minX, y: screen.minY, width: screen.width,
+                                                      height: height),
+            firstButtonX: nil, screen: screen, displayID: screen == primary ? 1 : 2, captions: captions,
+            buttons: buttons, spaceIDs: captions.map(\.spaceID))
+    }
+
+    /// The sixth thumbnail hovered and grown, its neighbours shrunk, as measured.
+    private let magnifiedWidths: [Int: CGFloat] = [4: 104, 5: 164, 6: 104]
+    private var magnifiedBar: BarLayout { thumbnailBar(widths: magnifiedWidths) }
+    private func middle(of place: Int, on bar: BarLayout) -> CGFloat { bar.buttons[place].frame.midX }
+
+    func testThumbnailsOfOneWidthDoNotMagnify() {
+        XCTAssertFalse(BarMagnification.showsMagnification(thumbnailBar()))
+        let withinTolerance = thumbnailBar(widths: [5: 127 + BarMagnification.widthTolerance])
+        XCTAssertFalse(BarMagnification.showsMagnification(withinTolerance))
+    }
+
+    func testThumbnailsDifferingInWidthBeyondTheToleranceMagnify() {
+        XCTAssertTrue(BarMagnification.showsMagnification(magnifiedBar))
+        let justBeyond = thumbnailBar(widths: [5: 127 + BarMagnification.widthTolerance + 0.5])
+        XCTAssertTrue(BarMagnification.showsMagnification(justBeyond))
+    }
+
+    func testABarOfNamesNeverMagnifies() {
+        XCTAssertFalse(BarMagnification.showsMagnification(thumbnailBar(height: 40, widths: magnifiedWidths)))
+    }
+
+    /// A later session's bar, with no thumbnail yet magnified, is known to magnify from its first report.
+    func testABarFoundToMagnifyIsRememberedByScreenAndCount() {
+        var magnification = BarMagnification()
+        XCTAssertFalse(magnification.learn(from: thumbnailBar()))
+        XCTAssertFalse(magnification.magnifies(thumbnailBar()))
+        XCTAssertTrue(magnification.learn(from: magnifiedBar))
+        XCTAssertFalse(magnification.learn(from: magnifiedBar))
+        XCTAssertTrue(magnification.magnifies(thumbnailBar()))
+        XCTAssertFalse(magnification.magnifies(thumbnailBar(count: 15)))
+        XCTAssertFalse(magnification.magnifies(thumbnailBar(count: 11, on: builtIn)))
+    }
+
+    func testFifteenDesktopsShowEveryLabelWhereverThePointerIs() {
+        var magnification = BarMagnification()
+        _ = magnification.learn(from: magnifiedBar)
+        let fifteen = thumbnailBar(count: 15)
+        XCTAssertFalse(magnification.learn(from: fifteen))
+        for pointer in [CGPoint(x: middle(of: 5, on: fifteen), y: 60), CGPoint(x: 5, y: 60), CGPoint(x: 900, y: 700)] {
+            let shown = ShownLabels.on(fifteen, magnifies: magnification.magnifies(fifteen), pointer: pointer)
+            XCTAssertEqual(shown, .all)
+            XCTAssertEqual(fifteen.showing(shown).captions.count, 15)
+        }
+    }
+
+    func testABarOfNamesShowsEveryLabelThoughItsThumbnailsMagnify() {
+        var magnification = BarMagnification()
+        _ = magnification.learn(from: magnifiedBar)
+        let names = thumbnailBar(height: 40)
+        XCTAssertFalse(magnification.magnifies(names))
+        XCTAssertEqual(ShownLabels.on(names, magnifies: magnification.magnifies(names),
+                                      pointer: CGPoint(x: 400, y: 20)), .all)
+    }
+
+    /// The sixth thumbnail hovered, re-read as it grows and its neighbours shrink.
+    func testReReadThumbnailsMoveTheirCaptionsUnderThemAtTheWidthsLeft() throws {
+        let bar = thumbnailBar()
+        let frames = magnifiedBar.buttons.map(\.frame)
+        let followed = try XCTUnwrap(bar.following(count: 16, frames: frames))
+        XCTAssertEqual(followed.buttons.map(\.frame), frames)
+        XCTAssertEqual(followed.captions.map(\.centre), frames.map(MissionControlLabels.captionCentre(below:)))
+        XCTAssertEqual(followed.captions.map(\.spaceID), bar.captions.map(\.spaceID))
+        let centres = frames.map(\.midX)
+        XCTAssertEqual(followed.captions[5].maxWidth, min(centres[5] - centres[4], centres[6] - centres[5])
+                       - MissionControlLabels.labelGap)
+        XCTAssertEqual(followed.captions[0].maxWidth, centres[1] - centres[0] - MissionControlLabels.labelGap)
+    }
+
+    /// Only the labelled thumbnails have captions: each keeps its own thumbnail's place.
+    func testReReadThumbnailsMoveOnlyTheCaptionsThereAre() throws {
+        var bar = thumbnailBar()
+        bar.captions = [bar.captions[2], bar.captions[9]]
+        let frames = magnifiedBar.buttons.map(\.frame)
+        let followed = try XCTUnwrap(bar.following(count: 16, frames: frames))
+        XCTAssertEqual(followed.captions.map(\.centre),
+                       [frames[2], frames[9]].map(MissionControlLabels.captionCentre(below:)))
+    }
+
+    func testThumbnailsThatCannotBeReReadOrChangedInNumberAreMeasuredAgain() {
+        let bar = thumbnailBar()
+        let frames = magnifiedBar.buttons.map(\.frame)
+        XCTAssertNil(bar.following(count: 16, frames: nil))
+        XCTAssertNil(bar.following(count: nil, frames: frames))
+        XCTAssertNil(bar.following(count: 17, frames: frames))
+        XCTAssertNil(bar.following(count: 16, frames: Array(frames.dropLast())))
+    }
+
+    func testAMagnifyingBarsReadingLogsEachThumbnailsLeftEdgeAndWidth() {
+        let bar = thumbnailBar(count: 2, widths: [1: 163])
+        XCTAssertEqual(MissionControlLabels.thumbnailFrames(of: bar), "display 1 thumbnails 36.5,127.0 170.5,163.0")
+    }
+
+    func testOnlyTheHoveredThumbnailsLabelShows() {
+        let pointer = CGPoint(x: middle(of: 5, on: magnifiedBar), y: 60)
+        let shown = ShownLabels.on(magnifiedBar, magnifies: true, pointer: pointer)
+        XCTAssertEqual(shown, .only(5))
+        XCTAssertEqual(magnifiedBar.showing(shown).captions.map(\.spaceID), ["6"])
+    }
+
+    func testTheHoveredThumbnailChangesExactlyAtTheMiddleOfTheGap() {
+        let frames = magnifiedBar.buttons.map(\.frame)
+        let gapMiddle = (frames[5].maxX + frames[6].minX) / 2
+        XCTAssertEqual(ShownLabels.hoveredThumbnail(frames, at: gapMiddle - 0.5), 5)
+        XCTAssertEqual(ShownLabels.hoveredThumbnail(frames, at: gapMiddle), 6)
+        let before = (frames[4].maxX + frames[5].minX) / 2
+        XCTAssertEqual(ShownLabels.hoveredThumbnail(frames, at: before), 5)
+        XCTAssertEqual(ShownLabels.hoveredThumbnail(frames, at: before - 0.5), 4)
+    }
+
+    /// The strip slides in from the screen's edge, leaving the pointer beyond its end thumbnail: macOS
+    /// draws no caption there.
+    func testPastEitherEndOfTheStripNoThumbnailIsHovered() {
+        let frames = magnifiedBar.buttons.map(\.frame)
+        XCTAssertNil(ShownLabels.hoveredThumbnail(frames, at: frames[0].minX - 0.5))
+        XCTAssertEqual(ShownLabels.hoveredThumbnail(frames, at: frames[0].minX), 0)
+        XCTAssertEqual(ShownLabels.hoveredThumbnail(frames, at: frames[15].maxX - 0.5), 15)
+        XCTAssertNil(ShownLabels.hoveredThumbnail(frames, at: frames[15].maxX))
+        XCTAssertEqual(ShownLabels.on(magnifiedBar, magnifies: true, pointer: CGPoint(x: 10, y: 60)), .none)
+    }
+
+    func testWithThePointerOffAMagnifyingBarNoLabelShows() {
+        let x = middle(of: 5, on: magnifiedBar)
+        XCTAssertEqual(ShownLabels.on(magnifiedBar, magnifies: true, pointer: CGPoint(x: x, y: 146)), .only(5))
+        XCTAssertEqual(ShownLabels.on(magnifiedBar, magnifies: true, pointer: CGPoint(x: x, y: 146.5)), .none)
+        XCTAssertEqual(ShownLabels.on(magnifiedBar, magnifies: true, pointer: nil), .none)
+        XCTAssertTrue(magnifiedBar.showing(.none).captions.isEmpty)
+    }
+
+    /// macOS draws no other caption on a magnifying bar: the others are neither asked about nor spent.
+    func testAMagnifyingBarsCaptureAsksOnlyAboutTheHoveredCaption() {
+        let bar = magnifiedBar
+        let hovered = bar.showing(.only(5))
+        var looks = CaptionLooks()
+        let capture = looks.capture(of: [hovered], attempt: 1)
+        XCTAssertEqual(capture.asked.map(\.exact), [CaptionLooks.keys(bar: bar, caption: bar.captions[5]).exact])
+        XCTAssertEqual(looks.finish(capture, CaptionLooks.Result(), moved: false), .kept)
+        XCTAssertFalse(looks.lookMayArrive(for: bar.captions[5], on: bar))
+        XCTAssertTrue(looks.lookMayArrive(for: bar.captions[4], on: bar))
+        _ = looks.finish(looks.capture(of: [hovered], attempt: CaptionLooks.attemptLimit), CaptionLooks.Result(),
+                         moved: true)
+        XCTAssertTrue(looks.lookMayArrive(for: bar.captions[6], on: bar))
+        XCTAssertTrue(looks.capture(of: [bar.showing(.none)], attempt: 1).asked.isEmpty)
     }
 
     // MARK: - Motion recording

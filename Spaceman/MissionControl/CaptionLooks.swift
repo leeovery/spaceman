@@ -11,8 +11,10 @@ import AppKit
 /// captured over, and the captions this session's captures could find no look for.
 struct CaptionLooks {
 
-    /// A look for a caption: captured for it exactly, or borrowed from the bar at this height or another.
-    typealias Found = (look: NativeCaptionLook, exact: Bool, sameHeight: Bool)
+    /// A look for a caption with the bar at its height: captured for it exactly, or borrowed from its name.
+    /// A look from the bar at another height is never borrowed: it would draw a names-row caption's
+    /// larger text and darker plate over a thumbnail's, or the other way round.
+    typealias Found = (look: NativeCaptionLook, exact: Bool)
 
     /// Where a caption's look is kept. It belongs to its screen, the text it covers and the name over
     /// it, and to the bar's height: hover-expanded thumbnails put the captions over a different part of
@@ -20,8 +22,6 @@ struct CaptionLooks {
     struct Keys {
         let screen: String
         let exact: String
-        /// Whatever the bar's height, for a bar that has changed shape since.
-        let anyHeight: String
         /// By name alone, whatever caption it covers, for a caption that has moved to another thumbnail.
         let name: String
     }
@@ -59,16 +59,16 @@ struct CaptionLooks {
     static let lookWait: TimeInterval = 1.5
 
     private var exact: [String: NativeCaptionLook] = [:]
-    private var anyHeight: [String: NativeCaptionLook] = [:]
     private var byName: [String: NativeCaptionLook] = [:]
     /// Captures that placed a caption away from its look in use, each waiting for another to agree.
     private var waiting: [String: NativeCaptionLook] = [:]
-    /// This session's captions no look can arrive for, by `Keys.anyHeight`.
+    /// This session's captions no look can arrive for, by `Keys.exact`: a capture with the bar at one height
+    /// says nothing of its captions at another.
     private var spent: Set<String> = []
     /// How long the bars have rested this session, and since when they have been resting, if they are.
     private var restTime: TimeInterval = 0
     private var restingAt: TimeInterval?
-    /// `restTime` when this session first drew each caption without a look, by `Keys.anyHeight`.
+    /// `restTime` when this session first drew each caption without a look, by `Keys.exact`.
     private var lookless: [String: TimeInterval] = [:]
     /// What each screen showed behind its captions when its looks were captured, by `Keys.screen`.
     private(set) var backgrounds: [String: String] = [:]
@@ -81,25 +81,23 @@ struct CaptionLooks {
     static func keys(bar: BarLayout, caption: Caption) -> Keys {
         let screen = screenKey(bar.screen)
         let height = Int(bar.frame.height.rounded())
-        let anyHeight = "\(screen)|\(caption.covers)|\(caption.name)"
         return Keys(
-            screen: screen, exact: "\(anyHeight)|\(height)", anyHeight: anyHeight,
+            screen: screen, exact: "\(screen)|\(caption.covers)|\(caption.name)|\(height)",
             name: "\(screen)|\(caption.name)|\(height)")
     }
 
     func look(for caption: Caption, on bar: BarLayout) -> Found? {
         let keys = Self.keys(bar: bar, caption: caption)
-        if let look = exact[keys.exact] { return (look, true, true) }
-        if let look = anyHeight[keys.anyHeight] { return (look, false, false) }
+        if let look = exact[keys.exact] { return (look, true) }
         // Moved to another thumbnail, as when a desktop comes, goes or is dragged: until a capture
         // of it there, the look it had elsewhere.
-        return byName[keys.name].map { ($0, false, true) }
+        return byName[keys.name].map { ($0, false) }
     }
 
     /// Whether a look may yet be captured for a caption that has none: not once a capture has found
     /// none for it or given up, nor once it has waited `lookWait` of the bars at rest.
     mutating func lookMayArrive(for caption: Caption, on bar: BarLayout) -> Bool {
-        let key = Self.keys(bar: bar, caption: caption).anyHeight
+        let key = Self.keys(bar: bar, caption: caption).exact
         guard !spent.contains(key) else { return false }
         let since = lookless[key] ?? restTime
         lookless[key] = since
@@ -136,17 +134,17 @@ struct CaptionLooks {
         guard capture.session == session else { return .stale }
         let lastAttempt = capture.attempt >= Self.attemptLimit
         guard !moved else {
-            if lastAttempt { spent.formUnion(capture.asked.map(\.anyHeight)) }
+            if lastAttempt { spent.formUnion(capture.asked.map(\.exact)) }
             return .moved
         }
         var retry = false
         for keys in capture.asked {
             if result.failed.contains(keys.screen) {
-                if lastAttempt { spent.insert(keys.anyHeight) } else { retry = true }
+                if lastAttempt { spent.insert(keys.exact) } else { retry = true }
             } else if let captured = result.found[keys.exact] {
                 if !take(captured, for: keys) { retry = true }
             } else {
-                spent.insert(keys.anyHeight)
+                spent.insert(keys.exact)
             }
         }
         backgrounds.merge(result.backgrounds.filter { !result.failed.contains($0.key) }) { $1 }
@@ -161,7 +159,6 @@ struct CaptionLooks {
         waiting[keys.exact] = settled.waiting
         guard let use = settled.use else { return false }
         exact[keys.exact] = use
-        anyHeight[keys.anyHeight] = use
         byName[keys.name] = use
         return true
     }
@@ -172,7 +169,6 @@ struct CaptionLooks {
         let stale = Self.staleScreens(captured: backgrounds, current: current)
         guard !stale.isEmpty else { return 0 }
         exact = Self.dropping(exact, on: stale)
-        anyHeight = Self.dropping(anyHeight, on: stale)
         byName = Self.dropping(byName, on: stale)
         waiting = Self.dropping(waiting, on: stale)
         spent = spent.filter { !stale.contains(Self.screen(ofKey: $0)) }

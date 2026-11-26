@@ -65,14 +65,15 @@ extension MissionControlLabels {
 
     /// Once the bars have rested, fully in and unchanged, for a moment, captures them to match the
     /// native captions: each session, and again when they change, as when hovering expands the
-    /// thumbnails.
-    func captureIfSettled(_ bars: [BarLayout], now: TimeInterval) {
+    /// thumbnails. Only the captions macOS draws are asked about: on a magnifying bar, the hovered one.
+    func captureIfSettled(_ measured: [BarLayout], now: TimeInterval) {
         guard labelStyle == .nativeLook else { return }
         // Captions measured mid-slide sit off their resting places: wait for a measurement at rest.
-        guard bars.allSatisfy({ abs($0.frame.minY - $0.screen.minY) < 0.5 }) else {
+        guard measured.allSatisfy({ abs($0.frame.minY - $0.screen.minY) < 0.5 }) else {
             noteMotion()
             return
         }
+        let bars = measured.map { $0.showing(shownLabels(on: $0)) }
         let signature = Self.signature(of: bars)
         guard signature == restingSignature else {
             noteMotion()
@@ -82,7 +83,7 @@ extension MissionControlLabels {
         }
         let attempts = captureAttempts[signature, default: 0]
         guard !isCapturing, signature != capturedSignature, attempts < CaptionLooks.attemptLimit,
-              now - restingSince >= Self.captureSettle
+              now - restingSince >= Self.captureSettle, bars.contains(where: { !$0.captions.isEmpty })
         else { return }
         capturedSignature = signature
         captureAttempts[signature] = attempts + 1

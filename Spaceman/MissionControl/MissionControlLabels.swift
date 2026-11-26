@@ -86,6 +86,8 @@ final class MissionControlLabels {
     /// Each display's thumbnails as the Dock last laid them out, moved to the middle of the screen, by
     /// display and number of thumbnails: where they go as the bar grows, or as a desktop comes or goes.
     var expandedLayoutsByCount: [String: BarLayout] = [:]
+    /// The expanded bars found to magnify the hovered thumbnail, whose other thumbnails have no caption.
+    var magnification = BarMagnification()
     /// When the window server last said Mission Control was starting while it was already open, as it
     /// does as a desktop is added or removed.
     var spaceChangeBeganAt: TimeInterval?
@@ -113,7 +115,7 @@ final class MissionControlLabels {
     /// timing, to where the Dock puts it.
     var reflow: Reflow?
     /// The pointer's last place, in Accessibility coordinates, and when it moved there.
-    private var pointer: (time: TimeInterval, point: CGPoint)?
+    private(set) var pointer: (time: TimeInterval, point: CGPoint)?
     /// When the window server last said Mission Control had finished closing (system uptime).
     var missionControlEndedAt: TimeInterval?
 
@@ -138,6 +140,8 @@ final class MissionControlLabels {
     var currentSpaceIDs: Set<String> = []
     /// While debugging, the last trace of where the labels went, to log only changes.
     var lastTrace: String?
+    /// For the debug recording: which labels each bar last showed, to note only changes.
+    var lastShownRecord: String?
     /// For the debug recording: what WindowManager and the Dock report of their Spaces Bars' buttons.
     lazy var windowManagerProbe = SpacesBarProbe(tag: "wm", findBars: Self.windowManagerBars)
     lazy var dockProbe = SpacesBarProbe(tag: "dockbuttons", findBars: Self.dockBars)
@@ -559,7 +563,8 @@ final class MissionControlLabels {
         recordBars()
         followPointer(at: now)
         // Re-measure only while nothing moves, so a measurement never holds up a slide.
-        reader.request(remeasure: retraction <= 0 && swipe.state == .idle && slide == nil)
+        reader.request(
+            remeasure: retraction <= 0 && swipe.state == .idle && slide == nil, magnification: magnification)
         // A reading usually takes about a millisecond: wait briefly for this frame's, so the labels
         // stay in step with the Dock, but draw with the last one rather than wait on a busy Dock.
         // A replayed slide doesn't need it, so it never waits.
@@ -667,13 +672,28 @@ final class MissionControlLabels {
                     }
                 }
                 shownLayouts = reading.layouts
+                learnMagnification(from: reading.layouts, at: reading.answered)
             }
         }
         guard reading.answered != latestReadingTime else { return }
         previousReadingTime = latestReadingTime
         latestReadingTime = reading.answered
         record((reading.barFrame.map { String(format: "dock bar y %.1f h %.0f", $0.minY, $0.height) } ?? "dock no bar")
-               + String(format: ", asked %.4f, requested %.4f", reading.time, reading.requested), at: reading.answered)
+               + String(format: ", asked %.4f, requested %.4f", reading.time, reading.requested)
+               + reading.layouts.filter(magnification.magnifies).map { ", " + Self.thumbnailFrames(of: $0) }.joined(),
+               at: reading.answered)
+    }
+
+    /// Learns which expanded bars magnify from the Dock's report of them. Not while a thumbnail comes, goes
+    /// or is dragged: its width may then change for reasons of its own, and a bar wrongly taken to magnify
+    /// would lose its labels for the run.
+    private func learnMagnification(from layouts: [BarLayout], at time: TimeInterval) {
+        guard drag == nil, reflow == nil, pendingChange == nil else { return }
+        for layout in layouts where magnification.learn(from: layout) {
+            let found = "Spaces Bar magnifies on display \(layout.displayID) with \(layout.buttons.count) thumbnails"
+            Self.log.log("\(found, privacy: .public): labelling only the hovered one")
+            record(found, at: time)
+        }
     }
 
     /// The Dock reports the hover-expanded thumbnails at their new places as they start sliding

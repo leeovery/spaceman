@@ -25,6 +25,33 @@ extension MissionControlLabels {
         MissionControlMotionRecorder.shared.noteDrawn(overlay.drawnLabels(at: frameTime), at: frameTime)
     }
 
+    /// Notes in the debug motion recording, when it is on and it changes, which labels each bar shows: all,
+    /// or on a magnifying bar the hovered thumbnail's, by its space, or none.
+    func recordShown(_ shownByBar: [(bar: BarLayout, shown: ShownLabels)], at frameTime: TimeInterval) {
+        guard MissionControlMotionRecorder.isEnabled else { return }
+        let line = "labels shown: " + shownByBar.map { bar, shown in
+            let which: String
+            switch shown {
+            case .all: which = "all"
+            case .none: which = "none"
+            case .only(let place):
+                which = "hovered " + (bar.spaceIDs.indices.contains(place) ? bar.spaceIDs[place] : "place \(place + 1)")
+            }
+            return "display \(bar.displayID) \(which)"
+        }.joined(separator: ", ")
+        guard line != lastShownRecord else { return }
+        lastShownRecord = line
+        record(line, at: frameTime)
+    }
+
+    /// "display <id> thumbnails <x>,<width> ...": each thumbnail's left edge and width as the Dock last reported
+    /// them, in points, to check a magnifying bar's against the film.
+    static func thumbnailFrames(of bar: BarLayout) -> String {
+        "display \(bar.displayID) thumbnails " + bar.buttons.map {
+            String(format: "%.1f,%.1f", $0.frame.minX, $0.frame.width)
+        }.joined(separator: " ")
+    }
+
     /// Has WindowManager's Spaces Bar buttons read for the debug recording, when it is on, and the Dock's
     /// with `missionControlMotionDockButtons` too: each probe reads off the main thread, as often as its app
     /// answers, at most once a frame. The Dock's is off by default, as it delays the labels' own readings.
@@ -96,7 +123,7 @@ extension MissionControlLabels {
             droppedSpace = nil
             return
         }
-        let kind = found.map { $0.exact ? "exact" : $0.sameHeight ? "this height" : "other height" } ?? "none"
+        let kind = found.map { $0.exact ? "exact" : "by name" } ?? "none"
         let origin = label.lookOrigin.map { String(format: "%.0f,%.0f", $0.x, $0.y) } ?? "centred"
         record(String(format: "dropped %@ %@, caption %.0f,%.0f, look %@ at %@", caption.name, caption.covers,
                       caption.centre.x, caption.centre.y, kind, origin), at: time)
