@@ -817,10 +817,10 @@ final class MissionControlLabelsTests: XCTestCase {
                             colorHex: "00FF00"),
     ]
 
-    private func thumbnails(_ titles: [String]) -> [AX.Button] {
+    private func thumbnails(_ titles: [String], spacing: CGFloat = 100) -> [AX.Button] {
         let element = AXUIElementCreateApplication(getpid())
         return titles.indices.map { index in
-            (element, CGRect(x: CGFloat(index + 1) * 100, y: 0, width: 80, height: 24), titles[index])
+            (element, CGRect(x: CGFloat(index + 1) * spacing, y: 0, width: 80, height: 24), titles[index])
         }
     }
 
@@ -882,13 +882,15 @@ final class MissionControlLabelsTests: XCTestCase {
     }
 
     /// A Dock bar of `titles` showing `spaceIDs`, its captions matched in the native look.
-    private func dockBar(_ titles: [String], spaceIDs: [String]) -> BarLayout {
-        let found = thumbnails(titles)
+    private func dockBar(
+        _ titles: [String], spaceIDs: [String], labelsUnnamed: Bool = false, spacing: CGFloat = 100
+    ) -> BarLayout {
+        let found = thumbnails(titles, spacing: spacing)
         return BarLayout(
             bar: nil, firstButton: nil, frame: CGRect(x: 0, y: 0, width: 2560, height: 40), firstButtonX: nil,
             screen: primary, displayID: 1,
             captions: MissionControlLabels.dockCaptions(
-                found, spaceIDs: spaceIDs, labelsUnnamed: false, storedNames: storedNames).captions,
+                found, spaceIDs: spaceIDs, labelsUnnamed: labelsUnnamed, storedNames: storedNames).captions,
             buttons: found.map { ($0.element, $0.title, $0.frame) }, spaceIDs: spaceIDs)
     }
 
@@ -922,12 +924,87 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertNil(drag.place(of: "11", in: dropped))
     }
 
+    private func addReflow(spacesBefore: [String]) -> Reflow {
+        Reflow(screen: primary, timing: DockMotion.add, reference: 5, from: ["1": CGPoint(x: 300, y: 30)],
+               spacesBefore: spacesBefore, count: 2)
+    }
+
     func testADesktopAddedHasNoLabelUntilTheOthersAreInPlace() throws {
-        let reflow = Reflow(screen: primary, timing: DockMotion.add, reference: 5,
-                            from: ["1": CGPoint(x: 300, y: 30)], count: 2)
-        XCTAssertNil(reflow.move(of: caption(2, "Code")))
+        let reflow = addReflow(spacesBefore: ["1"])
+        XCTAssertTrue(reflow.holds(caption(2, "Code")))
+        XCTAssertFalse(reflow.holds(caption(1, "Mail")))
         let move = try XCTUnwrap(reflow.move(of: caption(1, "Mail")))
         XCTAssertEqual(move, TimedMove(timing: DockMotion.add, reference: 5, from: CGVector(dx: 100, dy: 0)))
+    }
+
+    /// A bar read while macOS and the Dock disagreed on its spaces: no label is new, so none waits.
+    func testNoLabelWaitsWhenTheSpacesBeforeWereUnknown() {
+        let reflow = addReflow(spacesBefore: [])
+        XCTAssertFalse(reflow.holds(caption(2, "Code")))
+        XCTAssertNil(reflow.move(of: caption(2, "Code")))
+    }
+
+    func testAPredictedRemovalMovesTheLabelsAfterItAPlaceAlong() throws {
+        let before = bar(primary, [caption(1, "Mail"), caption(2, "Code"), caption(3, "Notes")])
+        let predicted = try XCTUnwrap(MissionControlLabels.predictedLayout(before, centres: [500, 700], removing: 0))
+        XCTAssertEqual(predicted.captions.map(\.spaceID), ["2", "3"])
+        XCTAssertEqual(predicted.captions.map(\.index), [0, 1])
+        XCTAssertEqual(predicted.captions.map(\.centre.x), [500, 700])
+        XCTAssertTrue(predicted.spaceIDs.isEmpty)
+    }
+
+    /// The last thumbnail removed from a bar measured without it already: its labels' places don't fit.
+    func testAPredictedRemovalThatDoesNotFitIsDropped() {
+        let before = bar(primary, [caption(1, "Mail"), caption(2, "Code")])
+        XCTAssertNil(MissionControlLabels.predictedLayout(before, centres: [500], removing: 2))
+    }
+
+    // MARK: - The current desktop's pill
+
+    /// The Dock selects the third thumbnail; drawn as the first is removed, its label is renumbered second.
+    func testTheCurrentDesktopIsToldBySpaceNotPlace() {
+        let measured = dockBar(["Desktop 1", "Desktop 2", "Desktop 3"], spaceIDs: ["1", "2", "3"])
+        var third = caption(3, "Notes")
+        third.index = 1
+        var second = caption(2, "Code")
+        second.index = 0
+        let current = { (caption: Caption) in
+            MissionControlLabels.isCurrent(caption, selected: 2, on: measured, currentSpaceIDs: ["2"])
+        }
+        XCTAssertTrue(current(third))
+        XCTAssertFalse(current(second))
+    }
+
+    func testASelectionWhoseSpaceIsUnknownHasNoPill() {
+        let unknown = dockBar(["Desktop 1", "Desktop 2"], spaceIDs: [])
+        XCTAssertFalse(MissionControlLabels.isCurrent(caption(1, "Mail"), selected: 0, on: unknown,
+                                                      currentSpaceIDs: ["1"]))
+    }
+
+    func testWithoutASelectionMacOSsCurrentSpaceHasThePill() {
+        let measured = dockBar(["Desktop 1", "Desktop 2"], spaceIDs: ["1", "2"])
+        XCTAssertTrue(MissionControlLabels.isCurrent(caption(2, "Code"), selected: nil, on: measured,
+                                                     currentSpaceIDs: ["2"]))
+        XCTAssertFalse(MissionControlLabels.isCurrent(caption(1, "Mail"), selected: nil, on: measured,
+                                                      currentSpaceIDs: ["2"]))
+    }
+
+    // MARK: - Growing into thumbnails
+
+    /// Thumbnails grown last time with other spaces in their places: each label goes to its space's
+    /// place now, at the grown thumbnails' spacing.
+    func testAGrowthPlacesEachLabelAtItsThumbnailsPlaceNow() {
+        let titles = ["Desktop 1", "Desktop 2", "Desktop 3"]
+        let grown = dockBar(titles, spaceIDs: ["12", "13", "11"], spacing: 300)
+        let now = dockBar(titles, spaceIDs: ["13", "11", "12"], labelsUnnamed: true)
+        let placed = grown.placing(now)
+        XCTAssertEqual(placed.spaceIDs, now.spaceIDs)
+        XCTAssertEqual(placed.captions.map(\.spaceID), ["13", "11", "12"])
+        XCTAssertEqual(placed.captions.map(\.name), ["Desktop 1", "Mail", "Desktop 3"])
+        XCTAssertEqual(placed.captions.map(\.centre), grown.buttons.map {
+            MissionControlLabels.captionCentre(below: $0.frame)
+        })
+        XCTAssertEqual(placed.captions.map(\.maxWidth), [300, 300, 300].map { $0 - MissionControlLabels.labelGap })
     }
 
     // MARK: - Motion recording

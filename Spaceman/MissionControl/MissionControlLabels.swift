@@ -83,9 +83,8 @@ final class MissionControlLabels {
     var grow: (screen: CGRect, reference: TimeInterval, from: BarLayout, to: BarLayout)?
     /// The pointer has entered a bar of names, and the Dock is about to grow it.
     var pendingGrow: (time: TimeInterval, bar: BarLayout)?
-    /// Each display's thumbnails as the Dock last laid them out, moved to the middle of the screen.
-    private var expandedLayouts: [CGDirectDisplayID: BarLayout] = [:]
-    /// The same, by display and number of thumbnails, to know where they go as a desktop comes or goes.
+    /// Each display's thumbnails as the Dock last laid them out, moved to the middle of the screen, by
+    /// display and number of thumbnails: where they go as the bar grows, or as a desktop comes or goes.
     var expandedLayoutsByCount: [String: BarLayout] = [:]
     /// When the window server last said Mission Control was starting while it was already open, as it
     /// does as a desktop is added or removed.
@@ -417,8 +416,6 @@ final class MissionControlLabels {
             layout.rematched(labelsUnnamed: labelsUnnamed, storedNames: storedNames)
         }
         restingLayouts = restingLayouts.map(rematch)
-        expandedLayouts = expandedLayouts.mapValues(rematch)
-        expandedLayoutsByCount = expandedLayoutsByCount.mapValues(rematch)
     }
 
     static func axPoint(_ point: NSPoint) -> CGPoint {
@@ -466,18 +463,18 @@ final class MissionControlLabels {
         }) {
             to = reported.atRest()
         } else {
-            guard let layout = expandedLayouts[bar.displayID], layout.buttons.count == bar.buttons.count,
-                  layout.captions.map(\.index) == bar.captions.map(\.index)
-            else { return }
+            // Where as many thumbnails went last time: the places, not the spaces, which may since have moved.
+            guard let layout = expandedLayoutsByCount["\(bar.displayID)|\(bar.buttons.count)"] else { return }
             let hovered = bar.buttons.firstIndex { $0.frame.minX <= point.x && point.x <= $0.frame.maxX }
             let dx = hovered.map { point.x - layout.buttons[$0].frame.midX } ?? 0
-            to = layout.offsetBy(dx: dx)
+            to = layout.offsetBy(dx: dx).placing(bar)
         }
-        // The names as they are now, at the thumbnails' places.
+        // The names as they are now.
         to.captions = to.captions.map { caption in
-            guard var now = bar.captions.first(where: { $0.index == caption.index }) else { return caption }
+            guard var now = bar.captions.first(where: { $0.spaceID == caption.spaceID }) else { return caption }
             now.centre = caption.centre
             now.maxWidth = caption.maxWidth
+            now.index = caption.index
             return now
         }
         grow = (bar.screen, pending.time, bar, to)
@@ -647,7 +644,6 @@ final class MissionControlLabels {
                 logOutcome("Spaces Bar found, \(reading.layouts.reduce(0) { $0 + $1.captions.count }) labels shown")
                 for layout in reading.layouts where layout.frame.height > Self.expandedBarHeight {
                     let centred = layout.atRest().centred()
-                    expandedLayouts[layout.displayID] = centred
                     expandedLayoutsByCount["\(layout.displayID)|\(layout.buttons.count)"] = centred
                 }
                 if let running = grow, let reported = reading.layouts.first(where: {

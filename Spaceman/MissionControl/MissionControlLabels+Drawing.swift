@@ -19,7 +19,7 @@ extension MissionControlLabels {
         let matching = labelStyle == .nativeLook
         var labels: [MissionControlLabel] = []
         for (index, measured) in bars.enumerated() {
-            let selectedIndex = index < selected.count ? selected[index] : nil
+            let selectedPlace = index < selected.count ? selected[index] : nil
             // A bar growing into thumbnails is drawn at the thumbnails' places, each label moving there
             // from its name; one about to grow stays as it was until it starts.
             let growing = grow.flatMap { $0.screen == measured.screen ? $0 : nil }
@@ -58,23 +58,19 @@ extension MissionControlLabels {
                         dragged = drag.moves[caption.spaceID]?.earlier(by: drag.watched ? 0 : clock.frameDuration / 2)
                     }
                 }
-                var reflowing: TimedMove?
-                if let running = reflow, running.screen == bar.screen {
-                    // A label with nowhere to move from, as a desktop's just added, shows once the others are
-                    // in place: shown at once, it would sit still while they move.
-                    guard let move = running.move(of: caption) else { continue }
-                    reflowing = move.earlier(by: clock.frameDuration / 2)
-                }
+                let running = reflow.flatMap { $0.screen == bar.screen ? $0 : nil }
+                if running?.holds(caption) == true { continue }
+                let reflowing = running?.move(of: caption)?.earlier(by: clock.frameDuration / 2)
                 let moving = dragged ?? reflowing ?? growing.flatMap { running in
-                    running.from.captions.first { $0.index == caption.index }.map {
+                    running.from.captions.first { $0.spaceID == caption.spaceID }.map {
                         TimedMove(
                             timing: DockMotion.expand, reference: running.reference,
                             from: CGVector(dx: $0.centre.x - caption.centre.x, dy: $0.centre.y - caption.centre.y))
                         .earlier(by: clock.frameDuration / 2)
                     }
                 }
-                let variant = found?.look.variant(current: selectedIndex.map { $0 == caption.index }
-                    ?? currentSpaceIDs.contains(caption.spaceID))
+                let variant = found?.look.variant(current: Self.isCurrent(
+                    caption, selected: selectedPlace, on: measured, currentSpaceIDs: currentSpaceIDs))
                 var label = Self.label(for: caption, centre: centre, screen: bar.screen, look: variant)
                 label.barHeight = bar.frame.height
                 label.shift = sliding
@@ -97,6 +93,17 @@ extension MissionControlLabels {
         recordDrawn(at: frameTime)
         if MissionControlCaptionLook.isDebugging { trace(bars.first, labels: labels, retraction: retraction) }
         traceDrag(bars, labels: labels, at: frameTime)
+    }
+
+    /// Whether `caption`'s space is the current one, which has its pill: the space of the thumbnail the
+    /// Dock has selected on `measured`, the bar as it reported it, or without a selection macOS's current
+    /// spaces. Told by space, as a bar drawn where a desktop is being removed has its places renumbered.
+    /// A selection whose space isn't known has no pill.
+    static func isCurrent(
+        _ caption: Caption, selected: Int?, on measured: BarLayout, currentSpaceIDs: Set<String>
+    ) -> Bool {
+        guard let selected else { return currentSpaceIDs.contains(caption.spaceID) }
+        return measured.spaceIDs.indices.contains(selected) && measured.spaceIDs[selected] == caption.spaceID
     }
 
     static func label(

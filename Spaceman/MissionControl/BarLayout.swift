@@ -72,6 +72,23 @@ struct BarLayout {
             addButton: addButton?.offsetBy(dx: 0, dy: shift))
     }
 
+    /// `bar`'s labels at the places of this layout's thumbnails, for a bar with as many: each space's
+    /// label goes to its thumbnail's place in `bar`, which may have been reordered since this was seen.
+    func placing(_ bar: BarLayout) -> BarLayout {
+        var placed = self
+        placed.spaceIDs = bar.spaceIDs
+        let centres = buttons.map { MissionControlLabels.captionCentre(below: $0.frame) }
+        placed.captions = bar.captions.compactMap { caption in
+            guard centres.indices.contains(caption.index) else { return nil }
+            var moved = caption
+            moved.centre = centres[caption.index]
+            moved.maxWidth = MissionControlLabels.labelWidth(
+                at: caption.index, centres: centres, fallbackWidth: buttons.first?.frame.width ?? 0)
+            return moved
+        }
+        return placed
+    }
+
     /// This layout with its captions matched afresh from its thumbnails, with the names stored now and
     /// unnamed spaces labelled or not, as a session's style has it.
     func rematched(labelsUnnamed: Bool, storedNames: [String: SpaceNameInfo]) -> BarLayout {
@@ -144,12 +161,20 @@ struct Reflow {
     let timing: DockMotion.Timing
     let reference: TimeInterval
     let from: [String: CGPoint]
+    /// The spaces the bar showed before, by its thumbnails; empty when they weren't known.
+    let spacesBefore: [String]
     /// How many thumbnails the bar will have.
     let count: Int
     /// Where the labels go until the Dock reports the thumbnails.
     var predicted: BarLayout?
 
-    /// Where `caption`'s label moves from, or nil if it had no label before, as a desktop just added.
+    /// Whether `caption`'s label waits for the move to end, its space being new to the bar: shown at once,
+    /// it would sit still while the others move. Without the spaces from before, none waits.
+    func holds(_ caption: Caption) -> Bool {
+        !spacesBefore.isEmpty && !spacesBefore.contains(caption.spaceID)
+    }
+
+    /// Where `caption`'s label moves from, or nil if it had none before.
     func move(of caption: Caption) -> TimedMove? {
         from[caption.spaceID].map {
             TimedMove(timing: timing, reference: reference, from: CGVector(dx: $0.x - caption.centre.x, dy: 0))

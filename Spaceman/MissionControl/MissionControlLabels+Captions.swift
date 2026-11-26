@@ -86,17 +86,24 @@ extension MissionControlLabels {
         labelsUnnamed: Bool,
         storedNames: [String: SpaceNameInfo] = SpaceNameStore.shared.loadAll()
     ) -> (captions: [Caption], mismatch: String?) {
-        let centres = found.map {
-            // Dock: AX frame is top-left origin
-            // Caption "Desktop N" sits below the frame
-            // Spaces bar (small ~24pt high): caption ~15pt below frame
-            // Thumbnails (~77pt high): caption ~8pt below frame
-            let gapToCaption: CGFloat = $0.frame.height < 40 ? 18 : 8
-            let captionY = $0.frame.maxY + gapToCaption + MissionControlLabelOverlay.labelHeight / 2
-            return CGPoint(x: $0.frame.midX, y: captionY)
-        }
+        let centres = found.map { captionCentre(below: $0.frame) }
         return match(found, centres: centres, fallbackWidth: found.first?.frame.width ?? 0, spaceIDs: spaceIDs,
                      labelsUnnamed: labelsUnnamed, storedNames: storedNames)
+    }
+
+    /// Where the Dock's caption sits under a thumbnail with AX frame `frame`, top-left origin: about 15pt
+    /// below a bar of names (~24pt high), 8pt below thumbnails (~77pt high).
+    static func captionCentre(below frame: CGRect) -> CGPoint {
+        let gapToCaption: CGFloat = frame.height < 40 ? 18 : 8
+        return CGPoint(x: frame.midX, y: frame.maxY + gapToCaption + MissionControlLabelOverlay.labelHeight / 2)
+    }
+
+    /// How wide the label over the caption at `centres[index]` may be: up to the nearest neighbour's.
+    static func labelWidth(at index: Int, centres: [CGPoint], fallbackWidth: CGFloat) -> CGFloat {
+        let neighbours = [index - 1, index + 1]
+            .filter(centres.indices.contains)
+            .map { abs(centres[$0].x - centres[index].x) }
+        return (neighbours.min() ?? fallbackWidth) - labelGap
     }
 
     /// Matches thumbnails to spaces and their stored names and colours. A space never named gets a label
@@ -121,13 +128,9 @@ extension MissionControlLabels {
             let title = found[index].title
             guard let name = givenName(nameInfo) ?? (labelsUnnamed && !title.isEmpty ? title : nil)
             else { return nil }
-            let neighbours = [index - 1, index + 1]
-                .filter(centres.indices.contains)
-                .map { abs(centres[$0].x - centres[index].x) }
-            let width = (neighbours.min() ?? fallbackWidth) - labelGap
             return Caption(
                 centre: centres[index],
-                maxWidth: width,
+                maxWidth: labelWidth(at: index, centres: centres, fallbackWidth: fallbackWidth),
                 index: index,
                 covers: title,
                 name: name,
