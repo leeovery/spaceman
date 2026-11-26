@@ -28,7 +28,7 @@ struct BarMagnification {
     static let evenWidthsTime: TimeInterval = 0.3
 
     private var learned: [String: Learned] = [:]
-    /// Since when each bar has shown its thumbnails one width with the pointer over one, without a break.
+    /// Since when the pointer has been on one of each bar's thumbnails, all one width, without a break.
     private var evenSince: [String: TimeInterval] = [:]
 
     /// A bar's screen, by display and width, and its number of thumbnails: whether its thumbnails fit
@@ -57,11 +57,14 @@ struct BarMagnification {
         bar.frame.height > MissionControlLabels.expandedBarHeight && learned[Self.key(of: bar)] != .doesNotMagnify
     }
 
-    /// Learns from `bar` as the Dock reports it at `time`, with the pointer at `pointer` (AX coordinates)
-    /// and nothing else moving its thumbnails. Thumbnails of different widths with the pointer over the bar
-    /// show that it magnifies; of one width for `evenWidthsTime` with the pointer over one, that it doesn't,
-    /// which undoes a wrong guess. Returns what it learned, when that changed.
-    mutating func learn(from bar: BarLayout, pointer: CGPoint?, at time: TimeInterval) -> Learned? {
+    /// Learns from `bar` as the Dock reported it in a reading taken at `read`, with the pointer at `pointer`
+    /// (AX coordinates) at `time` and nothing else moving its thumbnails. Thumbnails of different widths with
+    /// the pointer over the bar show that it magnifies. Thumbnails of one width with the pointer on one show
+    /// that it doesn't, once a reading taken `evenWidthsTime` after the pointer came onto it still has them
+    /// so: a reading older than that, from a Dock slow to answer, may predate the pointer. That undoes a
+    /// wrong guess. Returns what it learned, when that changed.
+    mutating func learn(from bar: BarLayout, read: TimeInterval, pointer: CGPoint?, at time: TimeInterval)
+        -> Learned? {
         let key = Self.key(of: bar)
         let top = bar.screen.minY
         guard bar.frame.height > MissionControlLabels.expandedBarHeight, let pointer,
@@ -75,13 +78,13 @@ struct BarMagnification {
             evenSince[key] = nil
             return settle(key, as: .magnifies)
         }
-        guard bar.buttons.contains(where: { ($0.frame.minX..<$0.frame.maxX).contains(pointer.x) }) else {
+        guard bar.buttons.contains(where: { $0.frame.contains(pointer) }) else {
             evenSince[key] = nil
             return nil
         }
         let since = evenSince[key] ?? time
         evenSince[key] = since
-        return time - since >= Self.evenWidthsTime ? settle(key, as: .doesNotMagnify) : nil
+        return read - since >= Self.evenWidthsTime ? settle(key, as: .doesNotMagnify) : nil
     }
 
     /// Breaks every bar's run of even widths, as while something else moves the thumbnails.

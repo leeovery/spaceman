@@ -1151,17 +1151,17 @@ final class MissionControlLabelsTests: XCTestCase {
     /// Learning that magnifies from `magnifiedBar`, hovered, at time 10.
     private func learnedToMagnify() -> BarMagnification {
         var magnification = BarMagnification()
-        _ = magnification.learn(from: magnifiedBar, pointer: overSixth, at: 10)
+        _ = magnification.learn(from: magnifiedBar, read: 10, pointer: overSixth, at: 10)
         return magnification
     }
 
     /// A later session's bar, with no thumbnail yet magnified, is known to magnify from its first report.
     func testABarFoundToMagnifyIsRememberedByScreenAndCount() {
         var magnification = BarMagnification()
-        XCTAssertNil(magnification.learn(from: thumbnailBar(), pointer: overSixth, at: 10))
+        XCTAssertNil(magnification.learn(from: thumbnailBar(), read: 10, pointer: overSixth, at: 10))
         XCTAssertFalse(magnification.magnifies(thumbnailBar()))
-        XCTAssertEqual(magnification.learn(from: magnifiedBar, pointer: overSixth, at: 10.02), .magnifies)
-        XCTAssertNil(magnification.learn(from: magnifiedBar, pointer: overSixth, at: 10.04))
+        XCTAssertEqual(magnification.learn(from: magnifiedBar, read: 10.02, pointer: overSixth, at: 10.02), .magnifies)
+        XCTAssertNil(magnification.learn(from: magnifiedBar, read: 10.04, pointer: overSixth, at: 10.04))
         XCTAssertTrue(magnification.magnifies(thumbnailBar()))
         XCTAssertFalse(magnification.magnifies(thumbnailBar(count: 15)))
         XCTAssertFalse(magnification.magnifies(thumbnailBar(count: 11, on: builtIn)))
@@ -1171,18 +1171,55 @@ final class MissionControlLabelsTests: XCTestCase {
     /// pointer off the bar.
     func testWidthsTellNothingWithThePointerOffTheBar() {
         var magnification = BarMagnification()
-        XCTAssertNil(magnification.learn(from: magnifiedBar, pointer: CGPoint(x: overSixth.x, y: 400), at: 10))
-        XCTAssertNil(magnification.learn(from: magnifiedBar, pointer: nil, at: 10))
+        let below = CGPoint(x: overSixth.x, y: 400)
+        XCTAssertNil(magnification.learn(from: magnifiedBar, read: 10, pointer: below, at: 10))
+        XCTAssertNil(magnification.learn(from: magnifiedBar, read: 10, pointer: nil, at: 10))
         XCTAssertFalse(magnification.magnifies(magnifiedBar))
+    }
+
+    /// The bar's top margin and caption row may not magnify: only the pointer on a thumbnail itself tells.
+    func testEvenWidthsTellNothingWithThePointerOffTheThumbnailsThemselves() {
+        var magnification = BarMagnification()
+        let even = thumbnailBar()
+        let thumbnail = even.buttons[5].frame
+        for pointer in [CGPoint(x: thumbnail.midX, y: thumbnail.maxY + 5), CGPoint(x: thumbnail.midX, y: 2)] {
+            XCTAssertNil(magnification.learn(from: even, read: 10, pointer: pointer, at: 10))
+            XCTAssertNil(magnification.learn(from: even, read: 11, pointer: pointer, at: 11))
+        }
+        XCTAssertTrue(magnification.follows(even))
+    }
+
+    /// A Dock slow to answer leaves a reading from before the pointer came onto the thumbnail: only a
+    /// reading taken long enough after tells.
+    func testEvenWidthsCountOnlyInReadingsTakenAfterThePointerArrived() {
+        var magnification = BarMagnification()
+        let even = thumbnailBar()
+        XCTAssertNil(magnification.learn(from: even, read: 9.9, pointer: overSixth, at: 10))
+        XCTAssertNil(magnification.learn(from: even, read: 9.9, pointer: overSixth, at: 10.5))
+        XCTAssertNil(magnification.learn(from: even, read: 10.25, pointer: overSixth, at: 10.6))
+        XCTAssertEqual(magnification.learn(from: even, read: 10.3, pointer: overSixth, at: 10.62), .doesNotMagnify)
+    }
+
+    /// Measured still landing, the bar never matches its measurement once at rest: measured again then, but
+    /// not while it moves.
+    func testABarAtRestOffWhereItWasMeasuredIsMeasuredAgain() {
+        let bar = thumbnailBar()
+        let landed = bar.frame.offsetBy(dx: 0, dy: 3)
+        XCTAssertTrue(bar.restsOffItsPlace(now: landed, before: landed.offsetBy(dx: 0, dy: 0.3)))
+        XCTAssertFalse(bar.restsOffItsPlace(now: landed, before: landed.offsetBy(dx: 0, dy: -4)))
+        XCTAssertFalse(bar.restsOffItsPlace(now: landed, before: nil))
+        XCTAssertFalse(bar.restsOffItsPlace(now: bar.frame, before: bar.frame))
     }
 
     func testThumbnailsOfOneWidthUnderThePointerForAWhileDoNotMagnify() {
         var magnification = BarMagnification()
         let even = thumbnailBar()
         let settled = 10 + BarMagnification.evenWidthsTime
-        XCTAssertNil(magnification.learn(from: even, pointer: overSixth, at: 10))
-        XCTAssertNil(magnification.learn(from: even, pointer: overSixth, at: settled - 0.01))
-        XCTAssertEqual(magnification.learn(from: even, pointer: overSixth, at: settled), .doesNotMagnify)
+        XCTAssertNil(magnification.learn(from: even, read: 10, pointer: overSixth, at: 10))
+        let justShort = settled - 0.01
+        XCTAssertNil(magnification.learn(from: even, read: justShort, pointer: overSixth, at: justShort))
+        XCTAssertEqual(magnification.learn(from: even, read: settled, pointer: overSixth, at: settled),
+                       .doesNotMagnify)
         XCTAssertFalse(magnification.magnifies(even))
         XCTAssertFalse(magnification.follows(even))
     }
@@ -1194,20 +1231,20 @@ final class MissionControlLabelsTests: XCTestCase {
         let even = thumbnailBar()
         let frames = even.buttons.map(\.frame)
         let inGap = CGPoint(x: (frames[5].maxX + frames[6].minX) / 2, y: 60)
-        _ = magnification.learn(from: even, pointer: overSixth, at: 10)
-        XCTAssertNil(magnification.learn(from: even, pointer: inGap, at: 10.2))
-        XCTAssertNil(magnification.learn(from: even, pointer: overSixth, at: 10.35))
+        _ = magnification.learn(from: even, read: 10, pointer: overSixth, at: 10)
+        XCTAssertNil(magnification.learn(from: even, read: 10.2, pointer: inGap, at: 10.2))
+        XCTAssertNil(magnification.learn(from: even, read: 10.35, pointer: overSixth, at: 10.35))
         magnification.interrupt()
-        XCTAssertNil(magnification.learn(from: even, pointer: overSixth, at: 10.6))
-        XCTAssertNil(magnification.learn(from: even, pointer: overSixth, at: 10.8))
-        XCTAssertEqual(magnification.learn(from: even, pointer: overSixth, at: 10.9), .doesNotMagnify)
+        XCTAssertNil(magnification.learn(from: even, read: 10.6, pointer: overSixth, at: 10.6))
+        XCTAssertNil(magnification.learn(from: even, read: 10.8, pointer: overSixth, at: 10.8))
+        XCTAssertEqual(magnification.learn(from: even, read: 10.9, pointer: overSixth, at: 10.9), .doesNotMagnify)
     }
 
     func testEvenWidthsUndoAWrongGuessThatABarMagnifies() {
         var magnification = learnedToMagnify()
         let even = thumbnailBar()
-        _ = magnification.learn(from: even, pointer: overSixth, at: 11)
-        XCTAssertEqual(magnification.learn(from: even, pointer: overSixth, at: 11.3), .doesNotMagnify)
+        _ = magnification.learn(from: even, read: 11, pointer: overSixth, at: 11)
+        XCTAssertEqual(magnification.learn(from: even, read: 11.3, pointer: overSixth, at: 11.3), .doesNotMagnify)
         XCTAssertFalse(magnification.magnifies(magnifiedBar))
     }
 
@@ -1217,18 +1254,18 @@ final class MissionControlLabelsTests: XCTestCase {
         var magnification = BarMagnification()
         XCTAssertTrue(magnification.follows(thumbnailBar()))
         XCTAssertFalse(magnification.follows(thumbnailBar(height: 40)))
-        _ = magnification.learn(from: magnifiedBar, pointer: overSixth, at: 10)
+        _ = magnification.learn(from: magnifiedBar, read: 10, pointer: overSixth, at: 10)
         XCTAssertTrue(magnification.follows(thumbnailBar()))
         let fifteen = thumbnailBar(count: 15)
-        _ = magnification.learn(from: fifteen, pointer: overSixth, at: 10)
-        _ = magnification.learn(from: fifteen, pointer: overSixth, at: 10.3)
+        _ = magnification.learn(from: fifteen, read: 10, pointer: overSixth, at: 10)
+        _ = magnification.learn(from: fifteen, read: 10.3, pointer: overSixth, at: 10.3)
         XCTAssertFalse(magnification.follows(fifteen))
     }
 
     func testFifteenDesktopsShowEveryLabelWhereverThePointerIs() {
         var magnification = learnedToMagnify()
         let fifteen = thumbnailBar(count: 15)
-        XCTAssertNil(magnification.learn(from: fifteen, pointer: overSixth, at: 10))
+        XCTAssertNil(magnification.learn(from: fifteen, read: 10, pointer: overSixth, at: 10))
         for pointer in [CGPoint(x: middle(of: 5, on: fifteen), y: 60), CGPoint(x: 5, y: 60), CGPoint(x: 900, y: 700)] {
             let shown = ShownLabels.on(fifteen, magnifies: magnification.magnifies(fifteen), pointer: pointer)
             XCTAssertEqual(shown, .all)

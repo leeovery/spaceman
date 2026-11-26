@@ -117,6 +117,14 @@ struct BarLayout {
             && abs(barFrame.width - frame.width) <= 0.5 && abs(barFrame.height - frame.height) <= 0.5
     }
 
+    /// Whether the bar, now at `barFrame` and at `previous` a reading before, has come to rest away from where
+    /// it was measured, as when measured still landing: then it is measured again.
+    func restsOffItsPlace(now barFrame: CGRect, before previous: CGRect?) -> Bool {
+        guard let previous, !isWhereMeasured(now: barFrame) else { return false }
+        return abs(barFrame.minX - previous.minX) <= 0.5 && abs(barFrame.minY - previous.minY) <= 0.5
+            && abs(barFrame.width - previous.width) <= 0.5 && abs(barFrame.height - previous.height) <= 0.5
+    }
+
     /// How far every thumbnail slid sideways together since `old`, the same bar measured before, or nil when
     /// they didn't all move by the same amount, within half a point, at the same widths.
     func thumbnailShift(since old: BarLayout) -> CGFloat? {

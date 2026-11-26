@@ -571,7 +571,7 @@ final class MissionControlLabels {
         // A replayed slide doesn't need it, so it never waits.
         let reading = reader.latest(waitingUpTo: slide == nil ? Self.readingWait : 0)
         take(reading)
-        learnMagnification(from: reading.layouts, at: now)
+        learnMagnification(from: reading, at: now)
         watchCaptions(frameTime: frameTime)
         if let pending = pendingGrow { startGrowIfDue(pending, reading: reading, frameTime: frameTime) }
         if let running = grow, growIsOver(running, reading: reading, frameTime: frameTime) { grow = nil }
@@ -699,15 +699,17 @@ final class MissionControlLabels {
     /// Learns, each frame, which expanded bars magnify from the Dock's latest report of them, while nothing
     /// but the pointer moves their thumbnails: no grow, slide, zoom, drag, desktop coming or going, swipe,
     /// press, as for a window dragged onto the bar, or bar off its place.
-    private func learnMagnification(from layouts: [BarLayout], at time: TimeInterval) {
+    private func learnMagnification(from reading: DockReader.Reading, at time: TimeInterval) {
         guard grow == nil, pendingGrow == nil, slide == nil, zoom == nil, drag == nil, reflow == nil,
               pendingChange == nil, swipe.state == .idle, swipe.pressedAt == nil, retraction <= 0
         else {
             magnification.interrupt()
             return
         }
-        for layout in layouts {
-            guard let learned = magnification.learn(from: layout, pointer: pointer?.point, at: time) else { continue }
+        for layout in reading.layouts {
+            guard let learned = magnification.learn(
+                from: layout, read: reading.time, pointer: pointer?.point, at: time)
+            else { continue }
             let found = "Spaces Bar on display \(layout.displayID) with \(layout.buttons.count) thumbnails "
                 + (learned == .magnifies ? "magnifies" : "doesn't magnify")
             let labelling = learned == .magnifies ? "only the hovered one" : "every thumbnail"

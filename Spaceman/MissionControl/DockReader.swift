@@ -50,6 +50,8 @@ final class DockReader {
     private var mismatch: String?
     private var layoutsSession = -1
     private var lastMeasured: TimeInterval = 0
+    /// Each followed bar's frame at the last reading, by its place among the bars, to tell it has come to rest.
+    private var followedBarFrames: [Int: CGRect] = [:]
     /// Asked to measure everything at the next reading, whether due or not. Guarded by `condition`.
     private var measureRequested = false
 
@@ -135,6 +137,7 @@ final class DockReader {
             mismatch = nil
             layoutsSession = session
             lastMeasured = 0
+            followedBarFrames = [:]
         }
 
         // Follow the bars measured already: the first bar's frame, and every thumbnail of a bar whose
@@ -176,13 +179,18 @@ final class DockReader {
     /// Re-reads the thumbnails of each bar followed as they resize or slide under the pointer: a call for
     /// the list's count and one per thumbnail. Not while the bar itself is off its place, sliding in or out:
     /// the thumbnails move with it, which its frame tells, and taking their places too would move the labels
-    /// twice. False, to measure everything, when they can't be read or their number changed.
+    /// twice. False, to measure everything, when they can't be read, their number changed, or the bar has
+    /// come to rest off the place it was measured at.
     private func followThumbnails(_ magnification: BarMagnification, firstBarFrame: CGRect) -> Bool {
         var changed = false
         for (index, layout) in layouts.enumerated() where magnification.follows(layout) {
-            guard let barFrame = index == 0 ? firstBarFrame : layout.bar.flatMap(AX.frame),
-                  layout.isWhereMeasured(now: barFrame)
-            else { continue }
+            guard let barFrame = index == 0 ? firstBarFrame : layout.bar.flatMap(AX.frame) else { continue }
+            let before = followedBarFrames[index]
+            followedBarFrames[index] = barFrame
+            guard layout.isWhereMeasured(now: barFrame) else {
+                if layout.restsOffItsPlace(now: barFrame, before: before) { return false }
+                continue
+            }
             guard let followed = layout.following(
                 count: layout.list.flatMap(AX.childCount), frames: AX.frames(of: layout.buttons.map(\.element)))
             else { return false }
