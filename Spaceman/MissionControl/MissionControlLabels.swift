@@ -210,13 +210,15 @@ final class MissionControlLabels {
             self?.apps = self?.apps.filter { $0.value.pid != app.processIdentifier } ?? [:]
         }
 
-        // Listen for preference changes (only .standard, not other suites)
+        // Listen for preference changes (only .standard, not other suites). Not on queue .main: that makes
+        // the posting thread wait for the main thread, and the name store writes defaults from a background
+        // thread inside a barrier that the main thread can be waiting on, which deadlocked the app.
         NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: UserDefaults.standard,
-            queue: .main
+            queue: nil
         ) { [weak self] _ in
-            self?.handlePreferenceChange()
+            DispatchQueue.main.async { self?.handlePreferenceChange() }
         }
 
         // After sleep/wake or lock/unlock the cached AX elements and label windows can stop
