@@ -137,13 +137,14 @@ final class DockReader {
             lastMeasured = 0
         }
 
-        // Follow the bar measured already: its frame, and its first thumbnail to notice a shift.
+        // Follow the bars measured already: the first bar's frame, and every thumbnail of a bar whose
+        // thumbnails resize under the pointer, or else the first bar's first thumbnail to notice a shift.
         if let layout = layouts.first, let bar = layout.bar, let barFrame = AX.frame(of: bar) {
             let reshaped = abs(barFrame.width - layout.frame.width) > 0.5
                 || abs(barFrame.height - layout.frame.height) > 0.5
             var shifted = false
-            if let button = layout.firstButton, let measuredX = layout.firstButtonX,
-               let buttonX = AX.position(of: button)?.x {
+            if !magnification.follows(layout), let button = layout.firstButton,
+               let measuredX = layout.firstButtonX, let buttonX = AX.position(of: button)?.x {
                 shifted = abs(buttonX - measuredX) > 0.5
                 // The thumbnails sliding together, as the Dock moves them back to the middle: move the
                 // layout with them rather than measure it all again, which takes many calls to a Dock
@@ -159,7 +160,7 @@ final class DockReader {
                 }
             }
             let due = force || remeasure && now - lastMeasured >= MissionControlLabels.measureInterval
-            if !reshaped, !shifted, !due, followMagnifiedThumbnails(magnification) {
+            if !reshaped, !shifted, !due, followThumbnails(magnification, firstBarFrame: barFrame) {
                 return Reading(session: session, time: now, layouts: layouts, layoutsVersion: layoutsVersion,
                                barFrame: barFrame, mismatch: mismatch, selected: selected())
             }
@@ -172,12 +173,16 @@ final class DockReader {
                        barFrame: layouts.first?.frame, mismatch: mismatch, selected: selected())
     }
 
-    /// Re-reads the thumbnails of each bar that magnifies as they resize under the pointer, which moves
-    /// neither the bar nor, away from the strip's ends, its first thumbnail: a call for the list's count and
-    /// one per thumbnail. False, to measure everything, when they can't be read or their number changed.
-    private func followMagnifiedThumbnails(_ magnification: BarMagnification) -> Bool {
+    /// Re-reads the thumbnails of each bar followed as they resize or slide under the pointer: a call for
+    /// the list's count and one per thumbnail. Not while the bar itself is off its place, sliding in or out:
+    /// the thumbnails move with it, which its frame tells, and taking their places too would move the labels
+    /// twice. False, to measure everything, when they can't be read or their number changed.
+    private func followThumbnails(_ magnification: BarMagnification, firstBarFrame: CGRect) -> Bool {
         var changed = false
-        for (index, layout) in layouts.enumerated() where magnification.magnifies(layout) {
+        for (index, layout) in layouts.enumerated() where magnification.follows(layout) {
+            guard let barFrame = index == 0 ? firstBarFrame : layout.bar.flatMap(AX.frame),
+                  layout.isWhereMeasured(now: barFrame)
+            else { continue }
             guard let followed = layout.following(
                 count: layout.list.flatMap(AX.childCount), frames: AX.frames(of: layout.buttons.map(\.element)))
             else { return false }

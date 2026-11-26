@@ -403,6 +403,7 @@ final class MissionControlLabels {
         isTracking = true
         trackingStarted = ProcessInfo.processInfo.systemUptime
         beginLookSession()
+        magnification.interrupt()
         rematchKeptLayouts()
         sawBar = false
         latestReadingTime = 0
@@ -570,6 +571,7 @@ final class MissionControlLabels {
         // A replayed slide doesn't need it, so it never waits.
         let reading = reader.latest(waitingUpTo: slide == nil ? Self.readingWait : 0)
         take(reading)
+        learnMagnification(from: reading.layouts, at: now)
         watchCaptions(frameTime: frameTime)
         if let pending = pendingGrow { startGrowIfDue(pending, reading: reading, frameTime: frameTime) }
         if let running = grow, growIsOver(running, reading: reading, frameTime: frameTime) { grow = nil }
@@ -671,8 +673,8 @@ final class MissionControlLabels {
                         noticeShift(from: shownLayouts, to: reading.layouts, at: changedAt)
                     }
                 }
+                noteThumbnailsResizing(from: shownLayouts, to: reading.layouts)
                 shownLayouts = reading.layouts
-                learnMagnification(from: reading.layouts, at: reading.answered)
             }
         }
         guard reading.answered != latestReadingTime else { return }
@@ -680,18 +682,36 @@ final class MissionControlLabels {
         latestReadingTime = reading.answered
         record((reading.barFrame.map { String(format: "dock bar y %.1f h %.0f", $0.minY, $0.height) } ?? "dock no bar")
                + String(format: ", asked %.4f, requested %.4f", reading.time, reading.requested)
-               + reading.layouts.filter(magnification.magnifies).map { ", " + Self.thumbnailFrames(of: $0) }.joined(),
+               + reading.layouts.filter(magnification.follows).map { ", " + Self.thumbnailFrames(of: $0) }.joined(),
                at: reading.answered)
     }
 
-    /// Learns which expanded bars magnify from the Dock's report of them. Not while a thumbnail comes, goes
-    /// or is dragged: its width may then change for reasons of its own, and a bar wrongly taken to magnify
-    /// would lose its labels for the run.
+    /// Thumbnails still resizing under the pointer, as followed: a capture waits for them to settle, or the
+    /// plate it takes lands off the caption.
+    private func noteThumbnailsResizing(from old: [BarLayout], to new: [BarLayout]) {
+        let resizing = new.contains { bar in
+            magnification.follows(bar)
+                && old.first { $0.screen == bar.screen }.map { bar.thumbnailsMoved(since: $0) } == true
+        }
+        if resizing { noteMotion() }
+    }
+
+    /// Learns, each frame, which expanded bars magnify from the Dock's latest report of them, while nothing
+    /// but the pointer moves their thumbnails: no grow, slide, zoom, drag, desktop coming or going, swipe,
+    /// press, as for a window dragged onto the bar, or bar off its place.
     private func learnMagnification(from layouts: [BarLayout], at time: TimeInterval) {
-        guard drag == nil, reflow == nil, pendingChange == nil else { return }
-        for layout in layouts where magnification.learn(from: layout) {
-            let found = "Spaces Bar magnifies on display \(layout.displayID) with \(layout.buttons.count) thumbnails"
-            Self.log.log("\(found, privacy: .public): labelling only the hovered one")
+        guard grow == nil, pendingGrow == nil, slide == nil, zoom == nil, drag == nil, reflow == nil,
+              pendingChange == nil, swipe.state == .idle, swipe.pressedAt == nil, retraction <= 0
+        else {
+            magnification.interrupt()
+            return
+        }
+        for layout in layouts {
+            guard let learned = magnification.learn(from: layout, pointer: pointer?.point, at: time) else { continue }
+            let found = "Spaces Bar on display \(layout.displayID) with \(layout.buttons.count) thumbnails "
+                + (learned == .magnifies ? "magnifies" : "doesn't magnify")
+            let labelling = learned == .magnifies ? "only the hovered one" : "every thumbnail"
+            Self.log.log("\(found, privacy: .public): labelling \(labelling, privacy: .public)")
             record(found, at: time)
         }
     }
@@ -700,7 +720,8 @@ final class MissionControlLabels {
     /// sideways: slide the labels there on its timing, from where they are now.
     private func noticeShift(from old: [BarLayout], to new: [BarLayout], at time: TimeInterval) {
         guard let before = old.first, let after = new.first,
-              let dx = Self.uniformShift(from: before, to: after), abs(dx) > 0.5
+              let dx = Self.sidewaysShift(from: before, to: after, byThumbnails: magnification.follows(after)),
+              abs(dx) > 0.5
         else {
             if let before = old.first, let after = new.first, before.frame != after.frame { shift = nil }
             return
@@ -720,7 +741,11 @@ final class MissionControlLabels {
         return together ? dx : nil
     }
 
-    private static func uniformShift(from old: BarLayout, to new: BarLayout) -> CGFloat? {
+    /// How far a bar's thumbnails slid sideways together between two measurements of it, or nil. Judged on
+    /// the thumbnails themselves `byThumbnails`, for a bar whose thumbnails resize under the pointer: there a
+    /// lone caption moving tells nothing. Otherwise on the captions.
+    static func sidewaysShift(from old: BarLayout, to new: BarLayout, byThumbnails: Bool) -> CGFloat? {
+        if byThumbnails { return new.thumbnailShift(since: old) }
         guard old.frame == new.frame else { return nil }
         return uniformShift(from: old.captions.map(\.centre), to: new.captions.map(\.centre))
     }

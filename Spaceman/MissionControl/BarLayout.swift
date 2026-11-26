@@ -97,6 +97,8 @@ struct BarLayout {
         guard count == buttons.count, let frames, frames.count == buttons.count else { return nil }
         var followed = self
         followed.buttons = zip(buttons, frames).map { ($0.element, $0.title, $1) }
+        followed.firstButtonX = frames.first?.minX
+        followed.lastButtonX = frames.last?.minX
         let centres = frames.map(MissionControlLabels.captionCentre(below:))
         followed.captions = captions.map { caption in
             guard centres.indices.contains(caption.index) else { return caption }
@@ -107,6 +109,35 @@ struct BarLayout {
             return moved
         }
         return followed
+    }
+
+    /// Whether the bar, now at `barFrame`, is where it was measured, within half a point.
+    func isWhereMeasured(now barFrame: CGRect) -> Bool {
+        abs(barFrame.minX - frame.minX) <= 0.5 && abs(barFrame.minY - frame.minY) <= 0.5
+            && abs(barFrame.width - frame.width) <= 0.5 && abs(barFrame.height - frame.height) <= 0.5
+    }
+
+    /// How far every thumbnail slid sideways together since `old`, the same bar measured before, or nil when
+    /// they didn't all move by the same amount, within half a point, at the same widths.
+    func thumbnailShift(since old: BarLayout) -> CGFloat? {
+        guard frame == old.frame, let first = buttons.first, let firstBefore = old.buttons.first,
+              buttons.count == old.buttons.count
+        else { return nil }
+        let dx = first.frame.minX - firstBefore.frame.minX
+        let together = zip(old.buttons, buttons).allSatisfy { before, now in
+            abs((now.frame.minX - before.frame.minX) - dx) <= 0.5 && abs(now.frame.width - before.frame.width) <= 0.5
+        }
+        return together ? dx : nil
+    }
+
+    /// Whether any thumbnail moved or resized by more than half a point since `old`, the same bar before.
+    func thumbnailsMoved(since old: BarLayout) -> Bool {
+        guard buttons.count == old.buttons.count else { return true }
+        return zip(old.buttons, buttons).contains { before, now in
+            abs(now.frame.minX - before.frame.minX) > 0.5 || abs(now.frame.minY - before.frame.minY) > 0.5
+                || abs(now.frame.width - before.frame.width) > 0.5
+                || abs(now.frame.height - before.frame.height) > 0.5
+        }
     }
 
     /// This layout with its captions matched afresh from its thumbnails, with the names stored now and

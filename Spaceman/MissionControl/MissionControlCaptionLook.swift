@@ -161,6 +161,8 @@ enum MissionControlCaptionLook {
     /// The sizes a native caption's text is taken to be between: its name is drawn no smaller or larger.
     private static let minFontSize: CGFloat = 10
     private static let maxFontSize: CGFloat = 20
+    /// How much of its own text's height at `minFontSize` a caption's text must show to be taken for it.
+    private static let plausibleShare: CGFloat = 0.8
 
     /// Saves each capture, and the labels drawn over it, to Spaceman's caches folder.
     static var isDebugging: Bool {
@@ -382,9 +384,10 @@ enum MissionControlCaptionLook {
                 clusters.append(y...y)
             }
         }
-        // Nor is text shorter than the caption's own text at the smallest size a caption is taken to be: a
-        // capture as the thumbnails resize can find a sliver of one where the caption should be.
-        let shortest = max(minTextHeight, inkBounds(of: caption.covers, size: minFontSize).height)
+        // Nor is text much shorter than the caption's own text at the smallest size a caption is taken to be:
+        // a capture as the thumbnails resize can find a sliver of one where the caption should be. The slack
+        // allows for antialiased rows lost at half contrast, and descenders a truncated caption drops.
+        let shortest = max(minTextHeight, plausibleShare * inkBounds(of: caption.covers, size: minFontSize).height)
         guard let cluster = clusters.first(where: { CGFloat($0.upperBound - $0.lowerBound + 1) >= shortest * scale })
         else { return .missed(String(format: "no text %.1fpt tall", shortest)) }
         guard cluster.upperBound - cluster.lowerBound < px(maxTextHeight) else {

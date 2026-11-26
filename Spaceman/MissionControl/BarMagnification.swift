@@ -8,17 +8,28 @@
 
 import AppKit
 
-/// The expanded bars that magnify, by screen and number of thumbnails, learned from the Dock's reports
-/// and kept for the run, so a later session knows from the first frame of the grow. macOS draws a
-/// magnifying bar's caption only under the hovered thumbnail.
+/// Which expanded bars magnify, by screen and number of thumbnails, learned from the Dock's reports and
+/// kept for the run, so a later session knows from the first frame of the grow. macOS draws a magnifying
+/// bar's caption only under the hovered thumbnail. A bar not yet known is labelled as one that doesn't
+/// magnify, and its thumbnails are followed as a magnifying bar's, so one reading tells.
 struct BarMagnification {
+
+    enum Learned: Equatable {
+        case magnifies
+        case doesNotMagnify
+    }
 
     /// How far apart the widest and narrowest thumbnails may be on a bar that doesn't magnify. A magnified
     /// thumbnail and its neighbours are 20pt or more off the others' width (measured on macOS 26.7 with 16
     /// desktops on a 2560-point screen); a bar that doesn't magnify has them all the same.
     static let widthTolerance: CGFloat = 2
+    /// How long the thumbnails must stay one width, with the pointer over one, to show the bar doesn't
+    /// magnify: a magnifying bar always has the one under the pointer grown.
+    static let evenWidthsTime: TimeInterval = 0.3
 
-    private var magnifying: Set<String> = []
+    private var learned: [String: Learned] = [:]
+    /// Since when each bar has shown its thumbnails one width with the pointer over one, without a break.
+    private var evenSince: [String: TimeInterval] = [:]
 
     /// A bar's screen, by display and width, and its number of thumbnails: whether its thumbnails fit
     /// at full size.
@@ -35,14 +46,53 @@ struct BarMagnification {
         return widest - narrowest > widthTolerance
     }
 
-    /// Whether `bar` shows thumbnails that magnify: never a bar of names.
+    /// Whether `bar` shows thumbnails known to magnify: never a bar of names.
     func magnifies(_ bar: BarLayout) -> Bool {
-        bar.frame.height > MissionControlLabels.expandedBarHeight && magnifying.contains(Self.key(of: bar))
+        bar.frame.height > MissionControlLabels.expandedBarHeight && learned[Self.key(of: bar)] == .magnifies
     }
 
-    /// Learns from a Dock report of `bar`: true when it newly shows that bars like it magnify.
-    mutating func learn(from bar: BarLayout) -> Bool {
-        Self.showsMagnification(bar) && magnifying.insert(Self.key(of: bar)).inserted
+    /// Whether `bar`'s thumbnails are read one by one as they resize: thumbnails known to magnify, or not
+    /// known yet. Never a bar of names, nor thumbnails known not to magnify.
+    func follows(_ bar: BarLayout) -> Bool {
+        bar.frame.height > MissionControlLabels.expandedBarHeight && learned[Self.key(of: bar)] != .doesNotMagnify
+    }
+
+    /// Learns from `bar` as the Dock reports it at `time`, with the pointer at `pointer` (AX coordinates)
+    /// and nothing else moving its thumbnails. Thumbnails of different widths with the pointer over the bar
+    /// show that it magnifies; of one width for `evenWidthsTime` with the pointer over one, that it doesn't,
+    /// which undoes a wrong guess. Returns what it learned, when that changed.
+    mutating func learn(from bar: BarLayout, pointer: CGPoint?, at time: TimeInterval) -> Learned? {
+        let key = Self.key(of: bar)
+        let top = bar.screen.minY
+        guard bar.frame.height > MissionControlLabels.expandedBarHeight, let pointer,
+              (top...(top + bar.frame.height)).contains(pointer.y),
+              (bar.frame.minX...bar.frame.maxX).contains(pointer.x)
+        else {
+            evenSince[key] = nil
+            return nil
+        }
+        if Self.showsMagnification(bar) {
+            evenSince[key] = nil
+            return settle(key, as: .magnifies)
+        }
+        guard bar.buttons.contains(where: { ($0.frame.minX..<$0.frame.maxX).contains(pointer.x) }) else {
+            evenSince[key] = nil
+            return nil
+        }
+        let since = evenSince[key] ?? time
+        evenSince[key] = since
+        return time - since >= Self.evenWidthsTime ? settle(key, as: .doesNotMagnify) : nil
+    }
+
+    /// Breaks every bar's run of even widths, as while something else moves the thumbnails.
+    mutating func interrupt() {
+        evenSince = [:]
+    }
+
+    private mutating func settle(_ key: String, as found: Learned) -> Learned? {
+        guard learned[key] != found else { return nil }
+        learned[key] = found
+        return found
     }
 }
 
