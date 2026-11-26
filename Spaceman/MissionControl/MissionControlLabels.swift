@@ -347,8 +347,9 @@ final class MissionControlLabels {
         // Listening for swipes needs Accessibility, which may have been granted since launch.
         if Self.spacesBarIsInDock { swipe.start() }
 
-        // macOS 27+: WindowManager (but may also work on 26.5+)
-        if let windowManager = appElement("com.apple.WindowManager") {
+        // macOS 27+: WindowManager. macOS 26.7's WindowManager shows the Spaces Bar too, at its resting place
+        // from the first moment of a swipe, so on 26 the Dock alone is followed.
+        if !Self.spacesBarIsInDock, let windowManager = appElement("com.apple.WindowManager") {
             let bars = AX.spacesBars(in: windowManager, depthLimit: 2) {
                 AX.identifier(of: $0) == "mc.spaces"
             }
