@@ -52,8 +52,11 @@ extension MissionControlLabels {
                 var centre = CGPoint(x: caption.centre.x, y: caption.centre.y + offset)
                 // Covered by the zoom to another desktop, as the Dock's caption is.
                 if let cover = zoomCover, zoom?.screen == bar.screen, cover.contains(centre) { continue }
+                let leaving = ridingGrow == true ? growing.flatMap { running in
+                    running.from.captions.first { $0.spaceID == caption.spaceID }.map { (running.from, $0) }
+                } : nil
                 let source = matching ? Self.lookSource(
-                    for: caption, on: bar, strip: drawing, ridingGrow: ridingGrow == true, looks: &captionLooks)
+                    for: caption, on: bar, strip: drawing, leaving: leaving, looks: &captionLooks)
                     : .fallback(nil)
                 if case .awaited = source { continue }
                 var dragged: TimedMove?
@@ -112,28 +115,37 @@ extension MissionControlLabels {
         case strip(CaptionStrip)
         /// A capture of its own caption, or one of its name elsewhere.
         case captured(FoundLook)
+        /// A capture of the caption it rides the grow from, on the names: placed as far below where it rides to
+        /// as `drop`, so that it starts where that caption was.
+        case riding(FoundLook, drop: CGFloat)
         /// None yet: macOS's own caption shows until one arrives.
         case awaited
-        /// None will arrive in time: drawn plainly, so the name still shows, on a plate of the bar's colour where
-        /// that is known, else as a box in its space's colour.
-        case fallback(LabelPlate?)
+        /// None will arrive in time: drawn plainly, so the name still shows; on a magnifying bar on a plate of the
+        /// bar's colour where that is known, else as a box in its space's colour.
+        case fallback(StripFallback?)
 
         var captured: FoundLook? {
-            if case .captured(let found) = self { return found }
-            return nil
+            switch self {
+            case .captured(let found), .riding(let found, _): return found
+            default: return nil
+            }
         }
     }
 
     /// Where `caption`'s look comes from on `bar`, in the native look. On a magnifying bar, drawn as `strip` has it,
-    /// whatever thumbnail it is under, with no capture of the caption itself; elsewhere, and while it rides the grow
-    /// from the names, a capture of the caption.
+    /// whatever thumbnail it is under, with no capture of the caption itself, unless it rides the grow from the
+    /// names, `leaving` that bar and its caption there, whose capture it takes while there is one. Elsewhere, a
+    /// capture of the caption.
     static func lookSource(
-        for caption: Caption, on bar: BarLayout, strip drawing: StripDrawing?, ridingGrow: Bool,
-        looks: inout CaptionLooks
+        for caption: Caption, on bar: BarLayout, strip drawing: StripDrawing?,
+        leaving: (bar: BarLayout, caption: Caption)?, looks: inout CaptionLooks
     ) -> LookSource {
-        if let drawing, !ridingGrow {
+        if let drawing {
+            if let leaving, let found = looks.look(for: leaving.caption, on: leaving.bar) {
+                return .riding(found, drop: caption.centre.y - leaving.caption.centre.y)
+            }
             if let strip = drawing.strip { return .strip(strip) }
-            return drawing.awaited ? .awaited : .fallback(drawing.plate)
+            return drawing.awaited ? .awaited : .fallback(drawing.fallback)
         }
         if let found = looks.look(for: caption, on: bar) { return .captured(found) }
         return looks.lookMayArrive(for: caption, on: bar) ? .awaited : .fallback(nil)
@@ -154,11 +166,14 @@ extension MissionControlLabels {
             dressed.strip = drawn.face
             dressed.lookOrigin = CGPoint(x: drawn.left, y: barTop + strip.top)
         case .captured(let found):
-            dressed.look = found.look.variant(current: current)
-            // Whichever thumbnail the native caption was found under.
-            dressed.lookOrigin = dressed.look.map { CGPoint(x: label.centre.x + $0.frame.minX, y: barTop + $0.top) }
-        case .fallback(let plate):
-            dressed.plate = plate
+            dressed.wear(found.look, current: current, barTop: barTop)
+        case .riding(let found, let drop):
+            dressed.wear(found.look, current: current, barTop: barTop + drop)
+        case .fallback(let fallback):
+            guard let fallback, let style else { break }
+            let placed = fallbackPlate(for: label, fallback: fallback, style: style)
+            dressed.plate = placed.plate
+            dressed.lookOrigin = placed.origin
         case .awaited:
             break
         }
@@ -195,5 +210,15 @@ extension MissionControlLabels {
             colorHex: caption.colorHex, centre: centre, screen: screen, look: look)
         label.key = caption.spaceID
         return label
+    }
+}
+
+private extension MissionControlLabel {
+
+    /// Takes `look`, as the current space's or not, placed under whichever thumbnail the native caption was found
+    /// under, as far below `barTop` as it was found.
+    mutating func wear(_ look: NativeCaptionLook, current: Bool, barTop: CGFloat) {
+        self.look = look.variant(current: current)
+        lookOrigin = self.look.map { CGPoint(x: centre.x + $0.frame.minX, y: barTop + $0.top) }
     }
 }

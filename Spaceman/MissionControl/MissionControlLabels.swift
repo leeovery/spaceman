@@ -133,9 +133,11 @@ final class MissionControlLabels {
     var motionCount = 0
     /// Captures this session by the bars' signature, so captures that never agree stop retrying.
     var captureAttempts: [String: Int] = [:]
-    /// Magnifying bars' caption strips, which their labels are drawn from, and whether a capture of one is under way.
+    /// Magnifying bars' caption strips, which their labels are drawn from, whether a capture of one is under way, and
+    /// one whose shot is back, waiting on the next reading to tell whether its thumbnail moved meanwhile.
     var captionStrips = CaptionStrips()
     var isCapturingStrip = false
+    var shotStrip: ShotStrip?
     /// The names drawn over strips, rendered ahead of their thumbnails' hover, and the style each strip's names were
     /// last rendered in this session.
     var stripNames = StripNames()
@@ -144,6 +146,8 @@ final class MissionControlLabels {
     /// moved while it ran; and since when they have been still. Thumbnails resizing don't count.
     var barMotionCount = 0
     var stillSince: TimeInterval?
+    /// When followed thumbnails were last found resizing under the pointer.
+    var thumbnailsResizedAt: TimeInterval?
     /// The style this session's labels are drawn in, fixed at its start so a session never mixes them.
     var labelStyle = MissionControlLabelStyle.spaceColors
     var requestedCaptureAccess = false
@@ -592,6 +596,7 @@ final class MissionControlLabels {
         // A replayed slide doesn't need it, so it never waits.
         let reading = reader.latest(waitingUpTo: slide == nil ? Self.readingWait : 0)
         take(reading)
+        if let shot = shotStrip { finishStripCapture(shot, reading: reading) }
         learnMagnification(from: reading, at: now)
         watchCaptions(frameTime: frameTime)
         if let pending = pendingGrow { startGrowIfDue(pending, reading: reading, frameTime: frameTime) }
@@ -714,13 +719,15 @@ final class MissionControlLabels {
     }
 
     /// Thumbnails still resizing under the pointer, as followed: a capture waits for them to settle, or the
-    /// plate it takes lands off the caption.
+    /// plate it takes lands off the caption, and a strip's capture, or the line it measures does.
     private func noteThumbnailsResizing(from old: [BarLayout], to new: [BarLayout]) {
         let resizing = new.contains { bar in
             magnification.follows(bar)
                 && old.first { $0.screen == bar.screen }.map { bar.thumbnailsMoved(since: $0) } == true
         }
-        if resizing { noteMotion() }
+        guard resizing else { return }
+        noteMotion()
+        thumbnailsResizedAt = ProcessInfo.processInfo.systemUptime
     }
 
     /// Bars reported away from where they were last, as when the Dock moves one a little within `restSlack` of fully

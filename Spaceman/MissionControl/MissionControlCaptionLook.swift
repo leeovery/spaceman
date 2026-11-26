@@ -219,10 +219,22 @@ enum MissionControlCaptionLook {
     }
 
     /// What a capture of a magnifying bar's caption row brought back: its strip, or why the hovered caption in it
-    /// couldn't be erased.
+    /// couldn't be erased; and what was seen of that caption, whenever it was found.
     enum StripCapture {
-        case strip(CaptionStrip)
-        case missed(String)
+        case strip(CaptionStrip, seen: CaptionSighting? = nil)
+        case missed(String, seen: CaptionSighting? = nil)
+
+        var seen: CaptionSighting? {
+            switch self {
+            case .strip(_, let seen), .missed(_, let seen): return seen
+            }
+        }
+    }
+
+    /// A capture of a caption row, and when its shot came back (system uptime).
+    struct StripShot {
+        let captured: StripCapture
+        let taken: TimeInterval
     }
 
     /// Captures `screen`'s caption row at the depth of `hovered`, the one caption macOS draws on a magnifying bar,
@@ -232,22 +244,24 @@ enum MissionControlCaptionLook {
         screen: CGRect,
         hovered: CaptionToMatch,
         background: String
-    ) async -> StripCapture? {
-        guard let sourceRect = region(of: [hovered], on: screen) else { return .missed("caption off the screen") }
+    ) async -> StripShot? {
+        guard let sourceRect = region(of: [hovered], on: screen) else {
+            return StripShot(captured: .missed("caption off the screen"), taken: ProcessInfo.processInfo.systemUptime)
+        }
         guard let shot = await shoot(displayID: displayID, screen: screen, sourceRect: sourceRect) else { return nil }
         let captured = strip(in: shot.image, origin: shot.origin, scale: shot.scale, hovered: hovered,
                              background: background)
         switch captured {
-        case .strip(let strip):
+        case .strip(let strip, _):
             log.log("Captured the caption strip of display \(displayID, privacy: .public)")
             if isDebugging, let folder = debugFolder() {
                 write(shot.image, to: folder.appendingPathComponent("display-\(displayID)-row.png"))
                 write(strip.image, to: folder.appendingPathComponent("display-\(displayID)-strip.png"))
             }
-        case .missed(let reason):
+        case .missed(let reason, _):
             log.log("No caption strip of display \(displayID, privacy: .public): \(reason, privacy: .public)")
         }
-        return captured
+        return StripShot(captured: captured, taken: shot.taken)
     }
 
     /// The band of `screen` to capture for `captions`, relative to the screen, in points; nil for none.
@@ -429,25 +443,31 @@ enum MissionControlCaptionLook {
         let bottom = min(found.baseline + max(px(bandBelow), pill.map { $0.bottom - found.baseline } ?? 0) + px(1),
                          pixels.height)
         let edges = eraseEdges(found, scale: scale)
-        guard bottom > top else { return .missed("no strip could be drawn") }
+        let lineOffset = lineOffset(of: found, origin: origin, scale: scale)
+        guard let textColor = cgColor(found.textColor, in: pixels.colorSpace) else { return .missed("no colour") }
+        let bar = barColor(beside: found, pixels: pixels, scale: scale)
+        let seen = CaptionSighting(
+            barColor: bar.flatMap { cgColor($0, in: pixels.colorSpace) }, textColor: textColor,
+            baseline: origin.y + CGFloat(found.baseline) / scale - hovered.barTop,
+            lineOffset: abs(lineOffset) <= maxLineOffset ? lineOffset : nil)
+        guard bottom > top else { return .missed("no strip could be drawn", seen: seen) }
         // A neighbour's caption still fading out, or the part of this one the search window cut off.
         guard !textBeside(edges, rows: top..<bottom, found: found, pixels: pixels, scale: scale)
-        else { return .missed("text left beside the caption") }
-        let lineOffset = lineOffset(of: found, origin: origin, scale: scale)
-        guard abs(lineOffset) <= maxLineOffset
-        else { return .missed(String(format: "caption %.1fpt off its thumbnail's middle", lineOffset)) }
+        else { return .missed("text left beside the caption", seen: seen) }
+        guard seen.lineOffset != nil else {
+            return .missed(String(format: "caption %.1fpt off its thumbnail's middle", lineOffset), seen: seen)
+        }
         let rowRect = CGRect(x: 0, y: top, width: pixels.width, height: bottom - top)
         guard let row = image.cropping(to: rowRect),
               let context = context(pixels.width, bottom - top, pixels.colorSpace),
-              let data = context.data?.assumingMemoryBound(to: UInt8.self),
-              let textColor = cgColor(found.textColor, in: pixels.colorSpace)
-        else { return .missed("no strip could be drawn") }
+              let data = context.data?.assumingMemoryBound(to: UInt8.self)
+        else { return .missed("no strip could be drawn", seen: seen) }
         context.draw(row, in: CGRect(x: 0, y: 0, width: pixels.width, height: bottom - top))
         let columns = max(edges.left, 0)..<min(max(edges.right, edges.left), pixels.width)
         let canvas = Canvas(data: data, width: pixels.width, left: 0, top: top, columns: columns, rows: top..<bottom)
         guard paintBar(canvas, edges: edges, found: found, pixels: pixels, scale: scale),
               let strip = context.makeImage()
-        else { return .missed("no bar beside the caption") }
+        else { return .missed("no bar beside the caption", seen: seen) }
         let measuredPill = pill.flatMap { pill in
             cgColor(pill.color, in: pixels.colorSpace).map {
                 CaptionStrip.PillStyle(
@@ -460,7 +480,7 @@ enum MissionControlCaptionLook {
             image: strip, scale: scale, top: origin.y + CGFloat(top) / scale - hovered.barTop,
             baseline: CGFloat(found.baseline - top) / scale, lineOffset: lineOffset,
             text: CaptionStrip.TextStyle(fontSize: found.fontSize, color: textColor), pill: measuredPill,
-            background: background))
+            background: background), seen: seen)
     }
 
     /// The columns a caption's plate covers, in pixels of its capture, with the right edge exclusive: its pill and a
@@ -482,15 +502,20 @@ enum MissionControlCaptionLook {
         return colors.isEmpty ? nil : mean(colors)
     }
 
-    /// Whether `rows` of the capture hold text outside the plate between `edges`, looked for in windows as wide as
-    /// `found`'s text, so that text is told from the bar's broad shading as in `measure`.
+    /// Whether `rows` of the capture hold text outside the plate between `edges`, as far either side as `found`'s
+    /// `maxWidth`, two thumbnails' widths on a magnifying bar, where a neighbour's caption can be: looked for in
+    /// windows as wide as `found`'s text, so that text is told from the bar's broad shading as in `measure`. Further
+    /// off, a steady feature of the row would reject every strip.
     private static func textBeside(
         _ edges: (left: Int, right: Int), rows: Range<Int>, found: Measured, pixels: Pixels, scale: CGFloat
     ) -> Bool {
         let window = max(found.inkWidth, 8), gap = Int((clusterGap * scale).rounded())
+        let reach = Int((found.caption.maxWidth * scale).rounded())
         let shortest = shortestText(covering: found.caption.covers) * scale
         let tallest = maxTextHeight * scale
-        let sides = [0..<min(max(edges.left, 0), pixels.width), min(max(edges.right, 0), pixels.width)..<pixels.width]
+        func clamped(_ x: Int) -> Int { min(max(x, 0), pixels.width) }
+        let sides = [clamped(edges.left - reach)..<clamped(edges.left),
+                     clamped(edges.right)..<clamped(edges.right + reach)]
         return sides.contains { side in
             stride(from: side.lowerBound, to: side.upperBound, by: window / 2).contains { start in
                 let columns = start..<min(start + window, side.upperBound)

@@ -10,44 +10,56 @@ import ImageIO
 import os
 
 /// The magnifying bars' caption strips, kept for the run and in Spaceman's caches folder so even a run's first hover
-/// is labelled at once, and this session's captures of them. Each session captures each strip once, so a changed
-/// wallpaper is picked up; a strip kept from before draws until then, unless captured over another background than
-/// its screen shows now. A capture that measures the captions otherwise than the strip drawn replaces it only once
-/// another agrees.
+/// is labelled at once, and this session's captures of them. Each session captures each strip until two captures
+/// agree, so a changed wallpaper is picked up; a strip kept from before draws until then, unless captured over another
+/// background than its screen shows now. A capture that measures the captions otherwise than the strip drawn replaces
+/// it only once another agrees, and only a strip two captures agree on is written to disk.
 struct CaptionStrips {
 
     /// A capture under way: its session, the strip it is for, the thumbnail hovered, the current space's or not, and
-    /// how many times the hovered thumbnail had changed when it started.
+    /// its frame; whether it only seeks the pill of a strip already captured; and how many times the hovered thumbnail
+    /// had changed when it started.
     struct Capture {
         let session: Int
         let key: String
         let place: Int
         let current: Bool
+        let thumbnail: CGRect
+        let seeksPill: Bool
         let hoverChanges: Int
     }
 
-    /// What a capture came to. All but `kept` count towards `attemptLimit` and wait `retryDelay` to try again.
+    /// What a capture came to. All but `kept` wait `retryDelay` before the next.
     enum Outcome: Equatable {
         /// From an earlier session: nothing taken.
         case stale
-        /// The bar moved, or another thumbnail was hovered, while it ran.
+        /// The bar or the thumbnails moved, or another thumbnail was hovered, while it ran: no evidence a capture
+        /// can't succeed, so it costs nothing.
         case moved
-        /// The screen couldn't be captured.
+        /// The screen couldn't be captured. Counts towards `attemptLimit`.
         case failed
-        /// The hovered caption couldn't be erased, or text was left beside it.
+        /// The hovered caption couldn't be erased, or text was left beside it. Counts towards `attemptLimit`.
         case missed
         /// It measured the captions otherwise than the strip drawn: held until another capture agrees with it.
+        /// Counts towards `heldLimit`.
         case held
+        /// Drawn, there being no strip to draw, but not yet agreed on by a second capture.
+        case drawn
+        /// Drawn, two captures agreeing on it: kept on disk.
         case kept
     }
 
     static let attemptLimit = CaptionLooks.attemptLimit
-    /// How long the hovered thumbnail, and the bar, must stay as they are before a capture: macOS's captions fade in
-    /// and out over about 100ms (filmed on macOS 26.7), and one caught fading is measured dim or left behind.
+    static let heldLimit = 2
+    /// How long the hovered thumbnail, the thumbnails' sizes and the bar must stay as they are before a capture:
+    /// macOS's captions fade in and out over about 100ms (filmed on macOS 26.7), and one caught fading is measured dim
+    /// or left behind, one caught moving off centre.
     static let settle: TimeInterval = 0.15
     static let retryDelay: TimeInterval = 0.25
     /// How long a bar may be hovered with no strip before its labels stop waiting for one and fall back.
     static let hoverWait: TimeInterval = 1.0
+    /// How far a hovered thumbnail may have moved by the first reading after the shot, in points.
+    static let thumbnailTolerance: CGFloat = 0.5
 
     /// A bar as its strip is kept: by display, screen size and bar height.
     private struct BarID: Hashable {
@@ -74,6 +86,14 @@ struct CaptionStrips {
         var waited: TimeInterval = 0
     }
 
+    /// What one kind of capture of a strip has spent this session: captures that failed or missed, and those held.
+    private struct Budget {
+        var spent = 0
+        var held = 0
+
+        var isLeft: Bool { spent < CaptionStrips.attemptLimit && held < CaptionStrips.heldLimit }
+    }
+
     private(set) var kept: [String: CaptionStrip] = [:]
     private(set) var session = 0
     /// What each screen shows behind its bar this session, by `CaptionLooks.screenKey`, and the screens, by display.
@@ -86,14 +106,17 @@ struct CaptionStrips {
     private var drawable: [String: CaptionStrip] = [:]
     /// Captures that disagreed with the strip drawn, each waiting for another to agree.
     private var waiting: [String: CaptionStrip] = [:]
-    /// This session's strips captured, and those captured with the current space's thumbnail hovered.
+    /// What captures last saw of each strip's caption, and the background they saw it over, kept for the run.
+    private var sightings: [String: (seen: CaptionSighting, background: String)] = [:]
+    /// This session's strips agreed on, and those captured with the current space's thumbnail hovered.
     private var captured: Set<String> = []
     private var capturedInPill: Set<String> = []
-    private var attempts: [String: Int] = [:]
+    private var stripBudgets: [String: Budget] = [:]
+    private var pillBudgets: [String: Budget] = [:]
     private var retryAt: [String: TimeInterval] = [:]
     private var hovers: [String: Hover] = [:]
-    /// Each strip's style and fallback plate, worked out once until its strip or the looks change.
-    private var dressing: [String: (style: CaptionStrip.Style, plate: LabelPlate?)] = [:]
+    /// Each strip's style and fallback, worked out once until its strip, its sighting or the looks change.
+    private var dressing: [String: (style: CaptionStrip.Style, fallback: StripFallback?)] = [:]
 
     mutating func beginSession(backgrounds: [String: String], screens: [ScreenInfo]) {
         session += 1
@@ -105,7 +128,8 @@ struct CaptionStrips {
         waiting = [:]
         captured = []
         capturedInPill = []
-        attempts = [:]
+        stripBudgets = [:]
+        pillBudgets = [:]
         retryAt = [:]
         hovers = [:]
         dressing = [:]
@@ -135,74 +159,110 @@ struct CaptionStrips {
         screens[bar.displayID]?.scale
     }
 
+    /// The bar's top a strip's depths are measured from: where the overlay puts it, the screen's top less the
+    /// retraction it lifts the labels by, so a bar resting a little short of fully in isn't lifted twice.
+    static func depthTop(of bar: BarLayout) -> CGFloat {
+        bar.screen.minY - MissionControlLabels.retraction(bar: bar.frame, screen: bar.screen) * bar.frame.height
+    }
+
+    /// Since when a capture's conditions have held: the bars still since `stillSince`, and the thumbnails not resized
+    /// since `resizedAt`. Nil while the bars aren't still.
+    static func steadySince(stillSince: TimeInterval?, resizedAt: TimeInterval?) -> TimeInterval? {
+        stillSince.map { max($0, resizedAt ?? $0) }
+    }
+
+    /// Whether a hovered thumbnail first at `start` is still there `now`, as read after a capture's shot.
+    static func thumbnailStayed(at start: CGRect, now: CGRect?) -> Bool {
+        guard let now else { return false }
+        let limit = thumbnailTolerance
+        return abs(now.minX - start.minX) <= limit && abs(now.minY - start.minY) <= limit
+            && abs(now.width - start.width) <= limit && abs(now.height - start.height) <= limit
+    }
+
     /// How `bar`'s labels are drawn, with the thumbnail at `place` hovered, if any, at `time`: from its strip, or
-    /// waiting for one, or falling back to a plate in `colors`, the colours measured on its screen, once none can
-    /// arrive in time.
+    /// waiting for one, or falling back to plates once none can arrive in time, in the colours a capture saw there or
+    /// else `colors`, those measured on its screen.
     mutating func drawing(
         for bar: BarLayout, hovered place: Int?, colors: () -> CaptionLooks.Colors, at time: TimeInterval
     ) -> StripDrawing {
+        let scale = scale(of: bar) ?? 2
         guard let key = key(for: bar) else {
             let measured = colors()
             return StripDrawing(key: nil, strip: nil, style: CaptionStrip.style(of: nil, measured: measured),
-                                plate: Self.plate(from: measured), awaited: false)
+                                fallback: Self.fallback(seen: nil, measured: measured, scale: scale), awaited: false)
         }
         noteHover(of: key, place: place, at: time)
         let strip = drawable[key]
         let dressed = dressing[key] ?? {
             let measured = colors()
-            let made = (style: CaptionStrip.style(of: strip, measured: measured), plate: Self.plate(from: measured))
+            let seen = sightings[key].flatMap { $0.background == backgroundOf[key] ? $0.seen : nil }
+            let made = (style: CaptionStrip.style(of: strip, measured: measured),
+                        fallback: Self.fallback(seen: seen, measured: measured, scale: scale))
             dressing[key] = made
             return made
         }()
-        return StripDrawing(key: key, strip: strip, style: dressed.style, plate: dressed.plate,
+        return StripDrawing(key: key, strip: strip, style: dressed.style, fallback: dressed.fallback,
                             awaited: strip == nil && mayArrive(key))
     }
 
-    /// The plate a magnifying bar's label falls back to: the bar's colour, with the text's, white where it wasn't
-    /// measured. None where the bar's colour isn't known.
-    static func plate(from colors: CaptionLooks.Colors) -> LabelPlate? {
-        colors.bar.map { LabelPlate(fill: $0, text: colors.text ?? CaptionStrip.unmeasuredText) }
+    /// The plates a magnifying bar's labels fall back to: in the colours a capture `seen` there, else the colours
+    /// `measured` on its screen. None where the bar's colour isn't known.
+    static func fallback(seen: CaptionSighting?, measured: CaptionLooks.Colors, scale: CGFloat) -> StripFallback? {
+        guard let fill = seen?.barColor ?? measured.bar else { return nil }
+        return StripFallback(fill: fill, text: seen?.textColor ?? measured.text ?? CaptionStrip.unmeasuredText,
+                             baseline: seen?.baseline, lineOffset: seen?.lineOffset ?? 0, scale: scale)
     }
 
-    /// The capture due of the strip `key`, with the thumbnail at `place` hovered, `current` if it is the current
-    /// space's, at `time`, the bars still since `stillSince`: the session's first, or one to measure the pill its
-    /// strip lacks. Only once the hover and the bars have settled, and `retryDelay` after a capture that came to
-    /// nothing.
-    func capture(key: String, hovered place: Int, current: Bool, at time: TimeInterval, stillSince: TimeInterval)
-        -> Capture? {
-        guard backgroundOf[key] != nil, attempts[key, default: 0] < Self.attemptLimit,
-              time >= retryAt[key, default: 0], let hover = hovers[key], hover.place == place,
-              time - hover.since >= Self.settle, time - stillSince >= Self.settle
+    /// The capture due of the strip `key`, with the thumbnail at `place`, whose frame is `thumbnail`, hovered,
+    /// `current` if it is the current space's, at `time`, all steady since `steadySince`: until two captures agree,
+    /// or one to measure the pill the strip lacks. Only once the hover and the rest have settled, `retryDelay` after a
+    /// capture that wasn't kept, and while that kind of capture has budget left.
+    func capture(
+        key: String, hovered place: Int, current: Bool, thumbnail: CGRect, at time: TimeInterval,
+        steadySince: TimeInterval
+    ) -> Capture? {
+        guard backgroundOf[key] != nil, time >= retryAt[key, default: 0], let hover = hovers[key],
+              hover.place == place, time - hover.since >= Self.settle, time - steadySince >= Self.settle
         else { return nil }
-        let seeksPill = current && drawable[key]?.pill == nil && !capturedInPill.contains(key)
-        guard !captured.contains(key) || seeksPill else { return nil }
-        return Capture(session: session, key: key, place: place, current: current, hoverChanges: hover.changes)
+        let seeksPill = captured.contains(key)
+        if seeksPill {
+            guard current, drawable[key]?.pill == nil, !capturedInPill.contains(key),
+                  pillBudgets[key, default: Budget()].isLeft
+            else { return nil }
+        } else {
+            guard stripBudgets[key, default: Budget()].isLeft else { return nil }
+        }
+        return Capture(session: session, key: key, place: place, current: current, thumbnail: thumbnail,
+                       seeksPill: seeksPill, hoverChanges: hover.changes)
     }
 
     /// Takes in what `capture` brought back at `time`, nil when the screen couldn't be captured, unless it belongs
-    /// to an earlier session, the bar moved (`barMoved`) or another thumbnail was hovered while it ran.
+    /// to an earlier session, or something `moved` or another thumbnail was hovered while it ran.
     mutating func finish(
-        _ capture: Capture, _ result: MissionControlCaptionLook.StripCapture?, barMoved: Bool, at time: TimeInterval
+        _ capture: Capture, _ result: MissionControlCaptionLook.StripCapture?, moved: Bool, at time: TimeInterval
     ) -> Outcome {
         guard capture.session == session else { return .stale }
+        let key = capture.key
         let outcome: Outcome
-        if barMoved || hovers[capture.key]?.changes != capture.hoverChanges {
+        if moved || hovers[key]?.changes != capture.hoverChanges {
             outcome = .moved
         } else {
+            if let seen = result?.seen, let background = backgroundOf[key] {
+                sightings[key] = (seen, background)
+                dressing[key] = nil
+            }
             switch result {
             case nil: outcome = .failed
             case .missed: outcome = .missed
-            case .strip(let strip): outcome = take(strip, for: capture)
+            case .strip(let strip, _): outcome = take(strip, for: capture)
             }
         }
-        if outcome != .kept {
-            attempts[capture.key, default: 0] += 1
-            retryAt[capture.key] = time + Self.retryDelay
-        }
+        spend(outcome, of: capture)
+        if outcome != .kept { retryAt[key] = time + Self.retryDelay }
         return outcome
     }
 
-    /// Notes that the looks changed, so each strip's style and plate are worked out afresh.
+    /// Notes that the looks changed, so each strip's style and fallback are worked out afresh.
     mutating func looksChanged() {
         dressing = [:]
     }
@@ -218,10 +278,20 @@ struct CaptionStrips {
     }
 
     /// Whether a strip may yet arrive for `key` in time to wait for it: while its screen's background is known, its
-    /// captures haven't all come to nothing and its bar hasn't been hovered for `hoverWait` with none.
+    /// captures haven't all failed or missed, and its bar hasn't been hovered for `hoverWait` with none.
     private func mayArrive(_ key: String) -> Bool {
-        backgroundOf[key] != nil && attempts[key, default: 0] < Self.attemptLimit
+        backgroundOf[key] != nil && stripBudgets[key, default: Budget()].spent < Self.attemptLimit
             && (hovers[key]?.waited ?? 0) < Self.hoverWait
+    }
+
+    private mutating func spend(_ outcome: Outcome, of capture: Capture) {
+        var budget = (capture.seeksPill ? pillBudgets : stripBudgets)[capture.key, default: Budget()]
+        switch outcome {
+        case .failed, .missed: budget.spent += 1
+        case .held: budget.held += 1
+        case .stale, .moved, .drawn, .kept: return
+        }
+        if capture.seeksPill { pillBudgets[capture.key] = budget } else { stripBudgets[capture.key] = budget }
     }
 
     private mutating func noteHover(of key: String, place: Int?, at time: TimeInterval) {
@@ -236,11 +306,13 @@ struct CaptionStrips {
         hovers[key] = hover
     }
 
-    /// Draws `strip` from now on, unless it measures the captions otherwise than the strip drawn and no capture
-    /// held before agrees with it. A strip that measured no pill keeps the one it replaces.
+    /// Draws `strip`, unless it measures the captions otherwise than the strip drawn and no capture held before
+    /// agrees with it. It is agreed on, and kept, once it agrees with the strip drawn or the one held; with no strip
+    /// drawn it is only drawn, until another capture agrees. A strip that measured no pill keeps the one it replaces.
     private mutating func take(_ strip: CaptionStrip, for capture: Capture) -> Outcome {
         let key = capture.key
-        if let held = drawable[key], !held.agrees(with: strip), waiting[key]?.agrees(with: strip) != true {
+        let drawn = drawable[key]
+        if let drawn, !drawn.agrees(with: strip), waiting[key]?.agrees(with: strip) != true {
             waiting[key] = strip
             return .held
         }
@@ -249,19 +321,20 @@ struct CaptionStrips {
         kept[key] = accepted
         drawable[key] = accepted
         dressing[key] = nil
-        captured.insert(key)
         if capture.current { capturedInPill.insert(key) }
+        guard drawn != nil else { return .drawn }
+        captured.insert(key)
         return .kept
     }
 }
 
 /// How a magnifying bar's labels are drawn this frame: its strip's key, its strip if one is drawn, the style its
-/// labels take, the plate they fall back to, and whether they wait for a strip rather than fall back.
+/// labels take, the plates they fall back to, and whether they wait for a strip rather than fall back.
 struct StripDrawing {
     let key: String?
     let strip: CaptionStrip?
     let style: CaptionStrip.Style
-    let plate: LabelPlate?
+    let fallback: StripFallback?
     let awaited: Bool
 }
 

@@ -10,12 +10,21 @@ import AppKit
 
 extension MissionControlLabels {
 
-    /// Captures a magnifying bar's caption row, once a session per screen and bar height and once more to measure the
-    /// current space's pill, once the bar has been still and the same thumbnail hovered for a moment. It doesn't wait
-    /// for the thumbnails to stop resizing: the bar's background doesn't move with them, and the one caption, under
-    /// the hovered thumbnail, is found wherever it has got to.
+    /// A strip's capture whose shot is back: what it brought, the bar motion count when it started, and its screen.
+    struct ShotStrip {
+        let capture: CaptionStrips.Capture
+        let shot: MissionControlCaptionLook.StripShot
+        let motion: Int
+        let screen: CGRect
+    }
+
+    /// Captures a magnifying bar's caption row, per screen and bar height until two captures agree, and once more to
+    /// measure the current space's pill, once the bar has been still, the thumbnails done resizing and the same
+    /// thumbnail hovered for a moment: the line of a caption caught moving is measured off its thumbnail's middle.
     func captureStripsIfDue(_ measured: [BarLayout], selected: [Int?], now: TimeInterval) {
-        guard labelStyle == .nativeLook, !isCapturingStrip, let stillSince else { return }
+        guard labelStyle == .nativeLook, !isCapturingStrip,
+              let steadySince = CaptionStrips.steadySince(stillSince: stillSince, resizedAt: thumbnailsResizedAt)
+        else { return }
         for (index, bar) in measured.enumerated() where magnification.magnifies(bar) {
             guard Self.retraction(bar: bar.frame, screen: bar.screen) <= Self.restSlack,
                   case .only(let place) = shownLabels(on: bar), bar.buttons.indices.contains(place),
@@ -25,7 +34,8 @@ extension MissionControlLabels {
                 spaceID: bar.spaceIDs[place], selected: index < selected.count ? selected[index] : nil, on: bar,
                 currentSpaceIDs: currentSpaceIDs)
             guard let capture = captionStrips.capture(
-                key: key, hovered: place, current: current, at: now, stillSince: stillSince)
+                key: key, hovered: place, current: current, thumbnail: bar.buttons[place].frame, at: now,
+                steadySince: steadySince)
             else { continue }
             startStripCapture(capture, of: bar, background: background)
             return
@@ -35,30 +45,50 @@ extension MissionControlLabels {
     private func startStripCapture(_ capture: CaptionStrips.Capture, of bar: BarLayout, background: String) {
         isCapturingStrip = true
         let thumbnail = bar.buttons[capture.place]
-        // The thumbnails can resize between this reading and the shot: the caption is looked for as far as a
-        // thumbnail's width either side. Its depth is measured from the screen's top, where the labels are drawn,
-        // so a bar the Dock reports a little off its place still gives the depth they go at.
+        // The caption is looked for as far as a thumbnail's width either side, and text left beside it as far as two.
+        // Its depth is measured from the bar's top where the overlay puts it, so a bar resting a little short of
+        // fully in isn't lifted twice.
         let hovered = CaptionToMatch(
-            key: capture.key, centre: Self.captionCentre(below: thumbnail.frame), barTop: bar.screen.minY,
-            barBottom: bar.frame.maxY, maxWidth: 2 * thumbnail.frame.width, covers: thumbnail.title, name: "")
+            key: capture.key, centre: Self.captionCentre(below: thumbnail.frame),
+            barTop: CaptionStrips.depthTop(of: bar), barBottom: bar.frame.maxY, maxWidth: 2 * thumbnail.frame.width,
+            covers: thumbnail.title, name: "")
         let motion = barMotionCount
         let displayID = bar.displayID, screen = bar.screen
         let owner = WeakOwner(self)
         Task.detached(priority: .userInitiated) {
-            let result = await MissionControlCaptionLook.captureStrip(
+            let shot = await MissionControlCaptionLook.captureStrip(
                 displayID: displayID, screen: screen, hovered: hovered, background: background)
             DispatchQueue.main.async {
-                owner.labels?.finishStripCapture(capture, result, motion: motion)
+                guard let labels = owner.labels else { return }
+                if let shot {
+                    labels.shotStrip = ShotStrip(capture: capture, shot: shot, motion: motion, screen: screen)
+                } else {
+                    labels.finishStripCapture(capture, nil, motion: motion, thumbnailStayed: true)
+                }
             }
         }
     }
 
-    /// Takes in a strip's capture, and writes it to disk once it is drawn.
+    /// Takes in `shot` once `reading` was read after it, telling whether its hovered thumbnail moved meanwhile.
+    func finishStripCapture(_ shot: ShotStrip, reading: DockReader.Reading) {
+        guard reading.time > shot.shot.taken else { return }
+        let place = shot.capture.place
+        let bar = reading.layouts.first { $0.screen == shot.screen }
+        let frame = bar.flatMap { $0.buttons.indices.contains(place) ? $0.buttons[place].frame : nil }
+        shotStrip = nil
+        finishStripCapture(
+            shot.capture, shot.shot.captured, motion: shot.motion,
+            thumbnailStayed: CaptionStrips.thumbnailStayed(at: shot.capture.thumbnail, now: frame))
+    }
+
+    /// Takes in a strip's capture, and writes its strip to disk once two captures agree on it.
     private func finishStripCapture(
-        _ capture: CaptionStrips.Capture, _ result: MissionControlCaptionLook.StripCapture?, motion: Int
+        _ capture: CaptionStrips.Capture, _ result: MissionControlCaptionLook.StripCapture?, motion: Int,
+        thumbnailStayed: Bool
     ) {
         let outcome = captionStrips.finish(
-            capture, result, barMoved: motion != barMotionCount, at: ProcessInfo.processInfo.systemUptime)
+            capture, result, moved: motion != barMotionCount || !thumbnailStayed,
+            at: ProcessInfo.processInfo.systemUptime)
         guard outcome != .stale else { return }
         isCapturingStrip = false
         record("strip capture \(capture.key) hovered \(capture.place + 1)\(capture.current ? " in its pill" : ""): "
@@ -86,6 +116,16 @@ extension MissionControlLabels {
             }
         }
         return drawing
+    }
+
+    /// `label` on `fallback`'s plate, centred where a strip would centre it, its names measured in `style`.
+    func fallbackPlate(
+        for label: MissionControlLabel, fallback: StripFallback, style: CaptionStrip.Style
+    ) -> (plate: LabelPlate, origin: CGPoint) {
+        fallback.plate(
+            nameWidth: stripNames.ink(of: label.name, style: style.text).width,
+            covers: stripNames.ink(of: label.covers, style: style.text), thumbnailMidX: label.centre.x,
+            captionCentreY: label.centre.y, barTop: label.screen.minY)
     }
 
     /// `label` drawn from `strip` in `style`, centred on the native caption's ink under its thumbnail: the face, and

@@ -67,14 +67,18 @@ struct CaptionStrip {
                             text: text, pill: kept, background: background)
     }
 
-    /// How far apart, 0-255 in sRGB, two captures' colours may be and still agree, and their text sizes in points.
+    /// How far apart, 0-255 in sRGB, two captures' colours may be and still agree, their text sizes in points, and
+    /// where they have macOS centre a caption, in points.
     static let colorAgreement: CGFloat = 10
     static let sizeAgreement: CGFloat = 0.5
+    static let lineAgreement: CGFloat = 1
 
-    /// Whether `other` measured the captions as this did: text of the same size and colour, and pills of the same
-    /// colour where both measured one. A capture taken as a caption faded in or out measures them dimmer.
+    /// Whether `other` measured the captions as this did: text of the same size and colour, centred as far off its
+    /// thumbnail's middle, and pills of the same colour where both measured one. A capture taken as a caption faded in
+    /// or out measures them dimmer; one taken as the thumbnails moved puts them off centre.
     func agrees(with other: CaptionStrip) -> Bool {
         guard abs(text.fontSize - other.text.fontSize) <= Self.sizeAgreement,
+              abs(lineOffset - other.lineOffset) <= Self.lineAgreement,
               Self.colorsAgree(text.color, other.text.color)
         else { return false }
         guard let pill, let otherPill = other.pill else { return true }
@@ -140,6 +144,44 @@ struct CaptionStrip {
                 color: pill.color)
         } : nil
         return StripFace.Layout(size: CGSize(width: width, height: height), nameFrame: nameFrame, pill: pill)
+    }
+}
+
+/// What a capture saw of a magnifying bar's hovered caption, whether or not it gave a strip: the bar's colour beside
+/// it, its text's colour, its baseline below the bar's top, and how far right of its thumbnail's middle macOS centred
+/// its line, unless the capture caught the thumbnails moving.
+struct CaptionSighting {
+    let barColor: CGColor?
+    let textColor: CGColor
+    let baseline: CGFloat
+    let lineOffset: CGFloat?
+}
+
+/// A magnifying bar's labels with no strip to draw: plates of the bar's colour, at least as large as the native pill
+/// and 2 pixels more all round, with the name in the native caption's text. Placed where the strip would place them
+/// as far as that is known: by the baseline and line offset a capture saw, else on the Dock's caption centre.
+struct StripFallback: Equatable {
+    let fill: CGColor
+    let text: CGColor
+    let baseline: CGFloat?
+    let lineOffset: CGFloat
+    let scale: CGFloat
+
+    /// The plate for a label whose name is `nameWidth` of ink over a native caption of `covers`, under the thumbnail
+    /// whose middle is at `thumbnailMidX`, the Dock putting the caption's centre at `captionCentreY`, on a bar whose
+    /// top is at `barTop`; and its top-left, in AX coordinates.
+    func plate(
+        nameWidth: CGFloat, covers: StripNames.Ink, thumbnailMidX: CGFloat, captionCentreY: CGFloat, barTop: CGFloat
+    ) -> (plate: LabelPlate, origin: CGPoint) {
+        let margin = 2 / scale
+        let above = MissionControlCaptionLook.bandAbove + margin
+        let size = CGSize(
+            width: max(nameWidth, covers.width) + 2 * MissionControlCaptionLook.pillPadding + 2 * margin,
+            height: above + MissionControlCaptionLook.bandBelow + margin)
+        let centreX = thumbnailMidX + lineOffset + covers.offset
+        let top = baseline.map { barTop + $0 - above } ?? captionCentreY - size.height / 2
+        return (LabelPlate(fill: fill, text: text, size: size, baseline: above),
+                CGPoint(x: centreX - size.width / 2, y: top))
     }
 }
 

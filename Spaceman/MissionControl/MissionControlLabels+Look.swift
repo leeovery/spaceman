@@ -29,6 +29,8 @@ extension MissionControlLabels {
         // A capture from the last session may still be running: it is ignored when it lands.
         isCapturing = false
         isCapturingStrip = false
+        shotStrip = nil
+        thumbnailsResizedAt = nil
         preparedStyles = [:]
         captionLooks.beginSession()
         let backgrounds = labelStyle == .nativeLook ? CaptionLooks.currentBackgrounds() : [:]

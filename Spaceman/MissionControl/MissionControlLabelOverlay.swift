@@ -47,11 +47,13 @@ struct MissionControlLabel {
     var key = ""
 }
 
-/// A plain plate a label's box is drawn on, with its name in the native caption's text: the bar's colour, and the
-/// text's.
+/// A plain plate a label is drawn on, with its name in the native caption's text: the bar's colour, the text's, the
+/// plate's size, and how far below its top the name's baseline sits.
 struct LabelPlate: Equatable {
     let fill: CGColor
     let text: CGColor
+    let size: CGSize
+    let baseline: CGFloat
 }
 
 /// Where a shown label is on screen at a moment, in AX coordinates, for the debug recording.
@@ -500,14 +502,15 @@ private final class LabelLayer: CALayer {
         content = wanted
 
         text.string = label.name
-        let font = label.plate == nil ? Self.font : Self.plateFont
+        if let plate = label.plate {
+            show(plate)
+            return
+        }
+        let font = Self.font
         let height = Self.height(of: font)
         text.font = font
         text.fontSize = font.pointSize
-        if let plate = label.plate {
-            backgroundColor = plate.fill
-            text.foregroundColor = plate.text
-        } else if let hex = label.colorHex, let color = NSColor.fromHex(hex) {
+        if let hex = label.colorHex, let color = NSColor.fromHex(hex) {
             backgroundColor = color.cgColor
             text.foregroundColor = color.contrastingTextColor.cgColor
         } else {
@@ -515,8 +518,7 @@ private final class LabelLayer: CALayer {
             text.foregroundColor = NSColor.white.cgColor
         }
         let iconStyle = IconStyle(rawValue: style.decoration) ?? .filledRounded
-        cornerRadius = label.plate != nil ? 0
-            : iconStyle.cornerRadius(for: NSRect(x: 0, y: 0, width: 0, height: height))
+        cornerRadius = iconStyle.cornerRadius(for: NSRect(x: 0, y: 0, width: 0, height: height))
 
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
         let nameWidth = (label.name as NSString).size(withAttributes: attrs).width
@@ -526,6 +528,20 @@ private final class LabelLayer: CALayer {
         bounds = CGRect(x: 0, y: 0, width: width, height: height)
         // A text layer draws its line from the top: this centres it in the box as the text field did.
         text.frame = CGRect(x: 0, y: Self.padding.height, width: width, height: height - Self.padding.height * 2)
+    }
+
+    /// Shows the name, already set, on `plate`, its baseline where the plate has it.
+    private func show(_ plate: LabelPlate) {
+        let font = Self.plateFont
+        text.font = font
+        text.fontSize = font.pointSize
+        text.foregroundColor = plate.text
+        backgroundColor = plate.fill
+        cornerRadius = 0
+        bounds = CGRect(origin: .zero, size: plate.size)
+        let line = ceil(font.ascender - font.descender + font.leading)
+        text.frame = CGRect(x: 0, y: plate.size.height - (plate.baseline - font.ascender) - line,
+                            width: plate.size.width, height: line)
     }
 
     /// Shows `face`: its strip as the layer's contents, cropped to the part behind the label, under its name and pill.
