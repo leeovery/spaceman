@@ -103,25 +103,33 @@ extension MissionControlLabels {
         let owner = WeakOwner(self)
         Task.detached(priority: .userInitiated) {
             var result = CaptionLooks.Result(backgrounds: backgrounds)
+            var reports: [CaptureReport] = []
             for job in jobs {
-                guard let looks = await MissionControlCaptionLook.capture(
+                guard let captured = await MissionControlCaptionLook.capture(
                     displayID: job.displayID, screen: job.screen, captions: job.captions)
                 else {
                     result.failed.insert(CaptionLooks.screenKey(job.screen))
                     continue
                 }
-                result.found.merge(looks) { $1 }
+                result.found.merge(captured.looks) { $1 }
+                if let report = captured.report { reports.append(report) }
             }
             DispatchQueue.main.async {
-                owner.labels?.finishCapture(capture, result, motion: motion)
+                owner.labels?.finishCapture(capture, result, motion: motion, reports: reports)
             }
         }
     }
 
     /// Keeps a capture's looks, unless it is from an earlier session or the bars moved while it ran. The
     /// bars are captured again after another rest when it moved or failed to capture a caption.
-    fileprivate func finishCapture(_ capture: CaptionLooks.Capture, _ result: CaptionLooks.Result, motion: Int) {
-        let outcome = captionLooks.finish(capture, result, moved: motion != motionCount)
+    fileprivate func finishCapture(
+        _ capture: CaptionLooks.Capture, _ result: CaptionLooks.Result, motion: Int, reports: [CaptureReport]
+    ) {
+        let moved = motion != motionCount
+        let outcome = captionLooks.finish(capture, result, moved: moved)
+        for report in reports {
+            record(report.line(attempt: capture.attempt, outcome: outcome, moved: moved), at: report.taken)
+        }
         guard outcome != .stale else { return }
         isCapturing = false
         guard outcome != .kept else { return }

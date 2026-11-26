@@ -138,6 +138,9 @@ final class MissionControlLabels {
     var currentSpaceIDs: Set<String> = []
     /// While debugging, the last trace of where the labels went, to log only changes.
     var lastTrace: String?
+    /// For the debug recording: what WindowManager and the Dock report of their Spaces Bars' buttons.
+    lazy var windowManagerProbe = SpacesBarProbe(tag: "wm", findBars: Self.windowManagerBars)
+    lazy var dockProbe = SpacesBarProbe(tag: "dockbuttons", findBars: Self.dockBars)
 
     var isEnabled: Bool {
         UserDefaults.standard.bool(forKey: MissionControlLabelStyle.namesShownKey)
@@ -551,6 +554,7 @@ final class MissionControlLabels {
         let frameTime = max(clock.targetTime ?? now, now)
         if let running = shift, running.slide.isFinished(at: frameTime) { shift = nil }
         recordPointer()
+        recordBars()
         followPointer(at: now)
         // Re-measure only while nothing moves, so a measurement never holds up a slide.
         reader.request(remeasure: retraction <= 0 && swipe.state == .idle && slide == nil)
@@ -872,6 +876,11 @@ final class MissionControlLabels {
         if direction > 0 { return max(dockRetraction, released) }
         if direction < 0 { return min(dockRetraction, released) }
         return dockRetraction
+    }
+
+    /// The running app's process, cached as `appElement` caches its element.
+    func pid(of bundleID: String) -> pid_t? {
+        appElement(bundleID).flatMap { _ in apps[bundleID]?.pid }
     }
 
     private func appElement(_ bundleID: String) -> AXUIElement? {

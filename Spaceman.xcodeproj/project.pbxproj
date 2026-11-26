@@ -27,6 +27,7 @@
 		E70AA6C03098C3A600195354 /* MissionControlLabels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70AA6BF3098C3A600195354 /* MissionControlLabels.swift */; };
 		d27510d8b17ab92988d9f154 /* MissionControlSwipeTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4554ee88260c5ff086782b46 /* MissionControlSwipeTracker.swift */; };
 		7633b8cbc2732ae875cb9c31 /* MissionControlMotionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8bef36859ae8795f0053c567 /* MissionControlMotionRecorder.swift */; };
+		5A1C0E7F3B2D4A6E8F901B2C /* SpacesBarProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1C0E7F3B2D4A6E8F901B2D /* SpacesBarProbe.swift */; };
 		ba4854810646fb57c2ff4934 /* WindowServerEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = bafadfa18500937bad9c0c2a /* WindowServerEvents.swift */; };
 		b6a7392876116d235dd8164a /* DockMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9bd265fd2148a1acc46cde3d /* DockMotion.swift */; };
 		fb6b8753b9d656f36046df4f /* MissionControlLabelOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 685a59fbb9e296c1fbc25bb5 /* MissionControlLabelOverlay.swift */; };
@@ -142,6 +143,7 @@
 		E70AA6BF3098C3A600195354 /* MissionControlLabels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionControlLabels.swift; sourceTree = "<group>"; };
 		4554ee88260c5ff086782b46 /* MissionControlSwipeTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionControlSwipeTracker.swift; sourceTree = "<group>"; };
 		8bef36859ae8795f0053c567 /* MissionControlMotionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionControlMotionRecorder.swift; sourceTree = "<group>"; };
+		5A1C0E7F3B2D4A6E8F901B2D /* SpacesBarProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpacesBarProbe.swift; sourceTree = "<group>"; };
 		bafadfa18500937bad9c0c2a /* WindowServerEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowServerEvents.swift; sourceTree = "<group>"; };
 		9bd265fd2148a1acc46cde3d /* DockMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockMotion.swift; sourceTree = "<group>"; };
 		685a59fbb9e296c1fbc25bb5 /* MissionControlLabelOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionControlLabelOverlay.swift; sourceTree = "<group>"; };
@@ -370,6 +372,7 @@
 				5D2B8F3CAE4061B7C9D2E3F4 /* CaptionLooks.swift */,
 				E70AA6BF3098C3A600195354 /* MissionControlLabels.swift */,
 				8bef36859ae8795f0053c567 /* MissionControlMotionRecorder.swift */,
+				5A1C0E7F3B2D4A6E8F901B2D /* SpacesBarProbe.swift */,
 				4554ee88260c5ff086782b46 /* MissionControlSwipeTracker.swift */,
 				bafadfa18500937bad9c0c2a /* WindowServerEvents.swift */,
 			);
@@ -644,6 +647,7 @@
 				E70AA6C03098C3A600195354 /* MissionControlLabels.swift in Sources */,
 				d27510d8b17ab92988d9f154 /* MissionControlSwipeTracker.swift in Sources */,
 				7633b8cbc2732ae875cb9c31 /* MissionControlMotionRecorder.swift in Sources */,
+				5A1C0E7F3B2D4A6E8F901B2C /* SpacesBarProbe.swift in Sources */,
 				ba4854810646fb57c2ff4934 /* WindowServerEvents.swift in Sources */,
 				b6a7392876116d235dd8164a /* DockMotion.swift in Sources */,
 				fb6b8753b9d656f36046df4f /* MissionControlLabelOverlay.swift in Sources */,

@@ -25,6 +25,29 @@ extension MissionControlLabels {
         MissionControlMotionRecorder.shared.noteDrawn(overlay.drawnLabels(at: frameTime), at: frameTime)
     }
 
+    /// Has WindowManager's Spaces Bar buttons read for the debug recording, when it is on, and the Dock's
+    /// with `missionControlMotionDockButtons` too: each probe reads off the main thread, as often as its app
+    /// answers, at most once a frame. The Dock's is off by default, as it delays the labels' own readings.
+    func recordBars() {
+        guard MissionControlMotionRecorder.isEnabled else { return }
+        if let pid = pid(of: "com.apple.WindowManager") { windowManagerProbe.request(pid: pid) }
+        if UserDefaults.standard.bool(forKey: "missionControlMotionDockButtons"), let pid = pid(of: "com.apple.dock") {
+            dockProbe.request(pid: pid)
+        }
+    }
+
+    /// WindowManager's Spaces Bars, found as `poll()` finds them on macOS 27. Any thread.
+    static func windowManagerBars(in windowManager: AXUIElement) -> [AXUIElement] {
+        AX.spacesBars(in: windowManager, depthLimit: 2) { AX.identifier(of: $0) == "mc.spaces" }
+    }
+
+    /// The Dock's Spaces Bars, found as the Dock reader finds them. Any thread.
+    static func dockBars(in dock: AXUIElement) -> [AXUIElement] {
+        AX.children(of: dock).filter { AX.title(of: $0) == "Mission Control" }.flatMap { missionControl in
+            AX.spacesBars(in: missionControl, depthLimit: 3) { AX.title(of: $0) == "Spaces Bar" }
+        }
+    }
+
     func recordPointer() {
         guard MissionControlMotionRecorder.isEnabled else { return }
         let point = NSEvent.mouseLocation

@@ -171,8 +171,8 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertTrue(close, "\(actual) is not \(expected)", file: file, line: line)
     }
 
-    private func matchSyntheticBar() throws -> [String: NativeCaptionLook] {
-        MissionControlCaptionLook.looks(in: try syntheticBar(), origin: .zero, scale: 2, captions: [
+    private var syntheticCaptions: [CaptionToMatch] {
+        [
             CaptionToMatch(key: "current", centre: CGPoint(x: 100, y: 20),
                            barTop: 0, barBottom: 40, maxWidth: 96, covers: "Desktop 1",
                            name: "Personal"),
@@ -182,7 +182,11 @@ final class MissionControlLabelsTests: XCTestCase {
             CaptionToMatch(key: "empty", centre: CGPoint(x: 200, y: 20),
                            barTop: 0, barBottom: 40, maxWidth: 96, covers: "Desktop 3",
                            name: "Nothing here"),
-        ])
+        ]
+    }
+
+    private func matchSyntheticBar() throws -> [String: NativeCaptionLook] {
+        MissionControlCaptionLook.looks(in: try syntheticBar(), origin: .zero, scale: 2, captions: syntheticCaptions)
     }
 
     func testTheCurrentSpaceGetsAPillOverTheNativeOne() throws {
@@ -305,6 +309,14 @@ final class MissionControlLabelsTests: XCTestCase {
 
     func testCaptionsWithNoTextAreNotMatched() throws {
         XCTAssertNil(try matchSyntheticBar()["empty"])
+    }
+
+    func testAMissedCaptionSaysWhyAndAMatchedOneHasNoMiss() throws {
+        let matches = MissionControlCaptionLook.matches(
+            in: try syntheticBar(), origin: .zero, scale: 2, captions: syntheticCaptions)
+        XCTAssertEqual(Set(matches.looks.keys), ["current", "other"])
+        XCTAssertEqual(Array(matches.misses.keys), ["empty"])
+        XCTAssertEqual(matches.misses["empty"], "contrast 0, not over 40")
     }
 
     // MARK: - Capture agreement
@@ -1068,5 +1080,41 @@ final class MissionControlLabelsTests: XCTestCase {
             "video tally 0.9s: 1 complete, 0 idle, 0 other, 0 unwritten, longest gap 5100.0ms, "
                 + "longest delay 10.0ms")
         XCTAssertNil(tally.summary(at: 17))
+    }
+
+    func testABarReadingLogsEveryButtonsRawFrameByBar() {
+        let line = SpacesBarProbe.line("wm", bars: [
+            [(title: "Desktop 1", frame: CGRect(x: 1180.26, y: 60, width: 120, height: 77.04)),
+             (title: "Mail", frame: CGRect(x: 1310, y: 60, width: 120, height: 77))],
+            [(title: "Desktop 1", frame: CGRect(x: 3424, y: 940.5, width: 96, height: 24))],
+        ])
+        XCTAssertEqual(
+            line, "wm Desktop 1@1180.3,60.0,120.0,77.0 Mail@1310.0,60.0,120.0,77.0 "
+                + "| Desktop 1@3424.0,940.5,96.0,24.0")
+    }
+
+    func testACaptureReportSaysWhatMatchedAndWhyTheRestMissed() throws {
+        let captions = Array(syntheticCaptions) + [
+            CaptionToMatch(key: "silent", centre: CGPoint(x: 400, y: 20), barTop: 0, barBottom: 40, maxWidth: 96,
+                           covers: "Desktop 4", name: "Quiet"),
+        ]
+        let matches = MissionControlCaptionLook.Matches(
+            looks: ["current": try look(top: 7.5), "other": try look(top: 7.5)],
+            misses: ["empty": "contrast 0, not over 40"])
+        let report = CaptureReport(displayID: 2, asked: 10, taken: 10.0124, captions: captions, matches: matches)
+        XCTAssertEqual(
+            report.line(attempt: 1, outcome: .kept, moved: false),
+            "capture display 2 attempt 1 kept, bars at rest, bar h 40, shot in 12ms: "
+                + "matched \"Desktop 1\" h 25.0, \"Desktop 2\" h 25.0; "
+                + "missed \"Desktop 3\" (contrast 0, not over 40), \"Desktop 4\" (no reason given)")
+    }
+
+    func testACaptureReportSaysWhenTheBarsMovedAndNothingMatched() {
+        let report = CaptureReport(displayID: 1, asked: 5, taken: 5.03, captions: Array(syntheticCaptions.prefix(1)),
+                                   matches: .init(misses: ["current": "cut off at the screen's edge"]))
+        XCTAssertEqual(
+            report.line(attempt: 4, outcome: .moved, moved: true),
+            "capture display 1 attempt 4 moved, bars moved, bar h 40, shot in 30ms: matched none; "
+                + "missed \"Desktop 1\" (cut off at the screen's edge)")
     }
 }
