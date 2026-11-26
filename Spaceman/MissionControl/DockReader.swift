@@ -41,6 +41,7 @@ final class DockReader {
     private var inFlight = false
     private var screens: [ScreenInfo] = []
     private var dockPID: pid_t = 0
+    private var labelsUnnamed = false
 
     // Used only on `queue`.
     private var dock: (pid: pid_t, element: AXUIElement)?
@@ -52,13 +53,15 @@ final class DockReader {
     /// Asked to measure everything at the next reading, whether due or not. Guarded by `condition`.
     private var measureRequested = false
 
-    /// Starts a Mission Control session, forgetting the last one's readings.
-    func begin(dockPID: pid_t, screens: [ScreenInfo]) {
+    /// Starts a Mission Control session, forgetting the last one's readings. `labelsUnnamed` gives
+    /// spaces never named a label too, as the session's style has it.
+    func begin(dockPID: pid_t, screens: [ScreenInfo], labelsUnnamed: Bool) {
         condition.lock()
         session += 1
         reading = Reading(session: session)
         self.dockPID = dockPID
         self.screens = screens
+        self.labelsUnnamed = labelsUnnamed
         condition.unlock()
     }
 
@@ -101,13 +104,15 @@ final class DockReader {
         let session = self.session
         let screens = self.screens
         let dockPID = self.dockPID
+        let labelsUnnamed = self.labelsUnnamed
         condition.unlock()
         let requested = ProcessInfo.processInfo.systemUptime
 
         queue.async { [weak self] in
             guard let self else { return }
             var fresh = self.read(
-                session: session, screens: screens, dockPID: dockPID, remeasure: remeasure, force: force)
+                session: session, screens: screens, dockPID: dockPID, labelsUnnamed: labelsUnnamed,
+                remeasure: remeasure, force: force)
             fresh.answered = ProcessInfo.processInfo.systemUptime
             fresh.requested = requested
             self.condition.lock()
@@ -119,7 +124,8 @@ final class DockReader {
     }
 
     private func read(
-        session: Int, screens: [ScreenInfo], dockPID: pid_t, remeasure: Bool, force: Bool = false
+        session: Int, screens: [ScreenInfo], dockPID: pid_t, labelsUnnamed: Bool, remeasure: Bool,
+        force: Bool = false
     ) -> Reading {
         let now = ProcessInfo.processInfo.systemUptime
         if layoutsSession != session {
@@ -159,7 +165,7 @@ final class DockReader {
         }
 
         // No bar yet, the bar was replaced, or it changed: measure everything.
-        mismatch = measure(screens: screens, dockPID: dockPID, now: now)
+        mismatch = measure(screens: screens, dockPID: dockPID, labelsUnnamed: labelsUnnamed, now: now)
         layoutsVersion += 1
         return Reading(session: session, time: now, layouts: layouts, layoutsVersion: layoutsVersion,
                        barFrame: layouts.first?.frame, mismatch: mismatch, selected: selected())
@@ -176,7 +182,9 @@ final class DockReader {
 
     /// Measures every Dock Spaces Bar and its captions: dozens of AX calls, so it runs when a bar
     /// appears or changes, and twice a second while it rests.
-    private func measure(screens: [ScreenInfo], dockPID: pid_t, now: TimeInterval) -> String? {
+    private func measure(
+        screens: [ScreenInfo], dockPID: pid_t, labelsUnnamed: Bool, now: TimeInterval
+    ) -> String? {
         lastMeasured = now
         if dock?.pid != dockPID {
             let element = AXUIElementCreateApplication(dockPID)
@@ -199,7 +207,7 @@ final class DockReader {
             guard let screen = screens.first(where: { $0.frame.contains(foot) }) else { continue }
             let list = AX.list(in: bar)
             let found = list?.buttons ?? []
-            let result = MissionControlLabels.dockCaptions(found, screen: screen)
+            let result = MissionControlLabels.dockCaptions(found, screen: screen, labelsUnnamed: labelsUnnamed)
             mismatch = result.mismatch ?? mismatch
             measured.append(BarLayout(
                 bar: bar,

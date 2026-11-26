@@ -400,7 +400,7 @@ final class MissionControlLabels {
         currentSpaceIDs = Self.currentSpaceIDs()
         lastMismatch = nil
         layoutsVersion = 0
-        reader.begin(dockPID: pid, screens: ScreenInfo.current())
+        reader.begin(dockPID: pid, screens: ScreenInfo.current(), labelsUnnamed: labelStyle == .spaceColors)
         pointer = (trackingStarted, Self.axPoint(NSEvent.mouseLocation))
         clock.start()
         tick()

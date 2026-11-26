@@ -35,7 +35,7 @@ extension MissionControlLabels {
         let source = screens.first { $0.frame.contains(first) }
         let fallbackWidth = found.first?.frame.width ?? 0
         let result = Self.match(found, centres: centres, fallbackWidth: fallbackWidth,
-                                spaceIDs: Self.orderedSpaceIDs(displayUUID: source?.uuid))
+                                spaceIDs: Self.orderedSpaceIDs(displayUUID: source?.uuid), labelsUnnamed: true)
         logMismatch(result.mismatch)
         var captions = result.captions
 
@@ -46,7 +46,7 @@ extension MissionControlLabels {
             let offsetY = target.frame.minY - source.frame.minY
             let moved = centres.map { CGPoint(x: $0.x + offsetX, y: $0.y + offsetY) }
             let mirrored = Self.match(found, centres: moved, fallbackWidth: fallbackWidth,
-                                      spaceIDs: Self.orderedSpaceIDs(displayUUID: target.uuid))
+                                      spaceIDs: Self.orderedSpaceIDs(displayUUID: target.uuid), labelsUnnamed: true)
             logMismatch(mirrored.mismatch)
             captions += mirrored.captions
         }
@@ -72,7 +72,7 @@ extension MissionControlLabels {
 
     /// The captions of one Dock Spaces Bar on `screen`; a caption can sit above its screen while
     /// the bar slides in or out. Safe off the main thread.
-    static func dockCaptions(_ found: [AX.Button], screen: ScreenInfo)
+    static func dockCaptions(_ found: [AX.Button], screen: ScreenInfo, labelsUnnamed: Bool)
         -> (captions: [Caption], mismatch: String?) {
         let centres = found.map {
             // Dock: AX frame is top-left origin
@@ -84,28 +84,29 @@ extension MissionControlLabels {
             return CGPoint(x: $0.frame.midX, y: captionY)
         }
         return match(found, centres: centres, fallbackWidth: found.first?.frame.width ?? 0,
-                     spaceIDs: orderedSpaceIDs(displayUUID: screen.uuid))
+                     spaceIDs: orderedSpaceIDs(displayUUID: screen.uuid), labelsUnnamed: labelsUnnamed)
     }
 
-    /// Matches thumbnails to spaces and looks up names from SpaceNameStore. Safe off the main thread.
-    fileprivate static func match(
+    /// Matches thumbnails to spaces and their stored names and colours. A space never named gets a label
+    /// reading its caption's own title when `labelsUnnamed`; otherwise none, so the Dock's own caption
+    /// shows. Safe off the main thread.
+    static func match(
         _ found: [AX.Button],
         centres: [CGPoint],
         fallbackWidth: CGFloat,
-        spaceIDs: [String]
+        spaceIDs: [String],
+        labelsUnnamed: Bool,
+        storedNames: [String: SpaceNameInfo] = SpaceNameStore.shared.loadAll()
     ) -> (captions: [Caption], mismatch: String?) {
         guard !centres.isEmpty else { return ([], nil) }
         guard spaceIDs.count == found.count else {
             return ([], "\(found.count) thumbnails but \(spaceIDs.count) spaces")
         }
 
-        let storedNames = SpaceNameStore.shared.loadAll()
         let captions = centres.indices.compactMap { index -> Caption? in
             let spaceID = spaceIDs[index]
-            // A space never named shows the Dock's own caption.
-            guard let nameInfo = storedNames[spaceID], !nameInfo.spaceName.isEmpty,
-                  nameInfo.spaceName != SpaceObserver.unnamedSpaceName
-            else { return nil }
+            let nameInfo = storedNames[spaceID]
+            guard let name = givenName(nameInfo) ?? (labelsUnnamed ? found[index].title : nil) else { return nil }
             let neighbours = [index - 1, index + 1]
                 .filter(centres.indices.contains)
                 .map { abs(centres[$0].x - centres[index].x) }
@@ -114,11 +115,17 @@ extension MissionControlLabels {
                 centre: centres[index],
                 maxWidth: width,
                 covers: found[index].title,
-                name: nameInfo.spaceName,
-                colorHex: nameInfo.colorHex,
+                name: name,
+                colorHex: nameInfo?.colorHex,
                 spaceID: spaceID)
         }
         return (captions, nil)
+    }
+
+    /// The name the user gave a space, or nil when it has none.
+    private static func givenName(_ nameInfo: SpaceNameInfo?) -> String? {
+        guard let name = nameInfo?.spaceName, !name.isEmpty, name != SpaceObserver.unnamedSpaceName else { return nil }
+        return name
     }
 
     // MARK: - Spaces, in the order Mission Control shows them

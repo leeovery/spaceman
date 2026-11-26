@@ -802,6 +802,63 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(timing.progress(at: time, from: 0), 0.5, accuracy: 0.001)
     }
 
+    // MARK: - Which spaces get a label
+
+    /// Three thumbnails: one named in red, one with only a colour, one with no stored entry.
+    private func matchedCaptions(labelsUnnamed: Bool) -> [Caption] {
+        let element = AXUIElementCreateApplication(getpid())
+        let found: [AX.Button] = (1...3).map { number in
+            (element, CGRect(x: CGFloat(number) * 100, y: 0, width: 80, height: 24), "Desktop \(number)")
+        }
+        let storedNames = [
+            "11": SpaceNameInfo(spaceNum: 1, spaceName: "Mail", spaceLabel: "1", colorHex: "FF0000"),
+            "12": SpaceNameInfo(spaceNum: 2, spaceName: SpaceObserver.unnamedSpaceName, spaceLabel: "2",
+                                colorHex: "00FF00"),
+        ]
+        return MissionControlLabels.match(
+            found, centres: found.map { CGPoint(x: $0.frame.midX, y: 40) }, fallbackWidth: 80,
+            spaceIDs: ["11", "12", "13"], labelsUnnamed: labelsUnnamed, storedNames: storedNames
+        ).captions
+    }
+
+    func testInSpaceColorsAnUnnamedSpaceIsLabelledWithItsCaptionAndColour() throws {
+        let caption = try XCTUnwrap(matchedCaptions(labelsUnnamed: true).first { $0.spaceID == "12" })
+        XCTAssertEqual(caption.name, "Desktop 2")
+        XCTAssertEqual(caption.covers, "Desktop 2")
+        XCTAssertEqual(caption.colorHex, "00FF00")
+    }
+
+    func testInSpaceColorsASpaceWithNoEntryIsLabelledWithItsCaptionAndNoColour() throws {
+        let caption = try XCTUnwrap(matchedCaptions(labelsUnnamed: true).first { $0.spaceID == "13" })
+        XCTAssertEqual(caption.name, "Desktop 3")
+        XCTAssertNil(caption.colorHex)
+    }
+
+    func testAnEmptyNameCountsAsUnnamed() throws {
+        let element = AXUIElementCreateApplication(getpid())
+        let found: [AX.Button] = [(element, CGRect(x: 0, y: 0, width: 80, height: 24), "Desktop 1")]
+        let named = ["1": SpaceNameInfo(spaceNum: 1, spaceName: "", spaceLabel: "1")]
+        let match = { (labelsUnnamed: Bool) in
+            MissionControlLabels.match(found, centres: [CGPoint(x: 40, y: 40)], fallbackWidth: 80, spaceIDs: ["1"],
+                                       labelsUnnamed: labelsUnnamed, storedNames: named).captions
+        }
+        XCTAssertEqual(match(true).map(\.name), ["Desktop 1"])
+        XCTAssertTrue(match(false).isEmpty)
+    }
+
+    func testInTheNativeLookUnnamedSpacesKeepTheirNativeCaptions() {
+        XCTAssertEqual(matchedCaptions(labelsUnnamed: false).map(\.spaceID), ["11"])
+    }
+
+    func testANamedSpaceShowsItsNameInEitherStyle() throws {
+        for labelsUnnamed in [true, false] {
+            let caption = try XCTUnwrap(matchedCaptions(labelsUnnamed: labelsUnnamed).first { $0.spaceID == "11" })
+            XCTAssertEqual(caption.name, "Mail")
+            XCTAssertEqual(caption.covers, "Desktop 1")
+            XCTAssertEqual(caption.colorHex, "FF0000")
+        }
+    }
+
     // MARK: - Motion recording
 
     func testDrawnLabelsAreLoggedByKeyAtTheirFrames() {
