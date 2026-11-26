@@ -1824,13 +1824,13 @@ final class MissionControlLabelsTests: XCTestCase {
     }
 
     func testTheTallyWaitsForItsInterval() {
-        var tally = FrameTally(interval: 5)
+        var tally = FrameTally(name: "video", interval: 5)
         XCTAssertNil(tally.count(.complete(shown: 10, written: true), at: 10.01))
         XCTAssertNil(tally.count(.idle, at: 14.9))
     }
 
     func testTheTallySumsUpEachInterval() {
-        var tally = FrameTally(interval: 5)
+        var tally = FrameTally(name: "video", interval: 5)
         _ = tally.count(.complete(shown: 10, written: true), at: 10.01)
         _ = tally.count(.complete(shown: 10.05, written: false), at: 10.07)
         _ = tally.count(.idle, at: 12)
@@ -1842,7 +1842,7 @@ final class MissionControlLabelsTests: XCTestCase {
     }
 
     func testTheTallyStartsAfreshAfterEachSummaryButCarriesTheGapOn() {
-        var tally = FrameTally(interval: 5)
+        var tally = FrameTally(name: "video", interval: 5)
         _ = tally.count(.complete(shown: 10, written: true), at: 10.01)
         _ = tally.count(.idle, at: 15.01)
         XCTAssertNil(tally.count(.complete(shown: 15.1, written: true), at: 15.11))
@@ -1851,6 +1851,18 @@ final class MissionControlLabelsTests: XCTestCase {
             "video tally 0.9s: 1 complete, 0 idle, 0 other, 0 unwritten, longest gap 5100.0ms, "
                 + "longest delay 10.0ms")
         XCTAssertNil(tally.summary(at: 17))
+    }
+
+    func testTheTallyIsNamedForItsFilmInEverySummary() {
+        var tally = FrameTally(name: "shown", interval: 5)
+        _ = tally.count(.complete(shown: 10, written: true), at: 10.01)
+        XCTAssertEqual(
+            tally.summary(at: 11),
+            "shown tally 1.0s: 1 complete, 0 idle, 0 other, 0 unwritten, longest gap 0.0ms, longest delay 10.0ms")
+        _ = tally.count(.idle, at: 12)
+        XCTAssertEqual(
+            tally.summary(at: 12.5),
+            "shown tally 0.5s: 0 complete, 1 idle, 0 other, 0 unwritten, longest gap 0.0ms, longest delay 0.0ms")
     }
 
     func testABarReadingLogsEveryButtonsRawFrameByBar() {
