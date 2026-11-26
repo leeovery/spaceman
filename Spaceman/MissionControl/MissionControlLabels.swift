@@ -136,14 +136,14 @@ final class MissionControlLabels {
     /// Magnifying bars' caption strips, which their labels are drawn from, and whether a capture of one is under way.
     var captionStrips = CaptionStrips()
     var isCapturingStrip = false
-    /// The names drawn over strips, rendered ahead of their thumbnails' hover.
+    /// The names drawn over strips, rendered ahead of their thumbnails' hover, and the style each strip's names were
+    /// last rendered in this session.
     var stripNames = StripNames()
-    /// Counts frames that found the bars moving, or not fully in, and changes of the thumbnail hovered on the bars at
-    /// rest, so a strip's capture can tell whether either changed while it ran. Thumbnails resizing count for neither.
+    var preparedStyles: [String: CaptionStrip.Style] = [:]
+    /// Counts frames that found the bars moving, or off their places, so a strip's capture can tell whether they
+    /// moved while it ran; and since when they have been still. Thumbnails resizing don't count.
     var barMotionCount = 0
-    var hoverCount = 0
-    /// The labels each bar at rest last showed, to notice the hovered thumbnail changing.
-    var lastHovered: [ShownLabels] = []
+    var stillSince: TimeInterval?
     /// The style this session's labels are drawn in, fixed at its start so a session never mixes them.
     var labelStyle = MissionControlLabelStyle.spaceColors
     var requestedCaptureAccess = false
@@ -189,7 +189,7 @@ final class MissionControlLabels {
     private static let openAnswerLimit: TimeInterval = 0.3
 
     /// How far off rest, as a fraction of the bar's height, still counts as at rest.
-    private static let restSlack: CGFloat = 0.05
+    static let restSlack: CGFloat = 0.05
 
     /// Bars taller than this show thumbnails.
     static let expandedBarHeight: CGFloat = 60
@@ -565,13 +565,16 @@ final class MissionControlLabels {
     /// Dock reader last learned, and asks it for more, so it never waits on the Dock.
     private func tick() {
         guard isTracking else { return }
-        // A frame that doesn't find the bars fully in and still counts as motion for the capture.
+        // A frame that doesn't find the bars fully in and still counts as motion for the capture. One that finds them
+        // within `restSlack` of fully in, with nothing moving them, counts as still for a strip's.
         var resting = false
+        var still = false
         let now = ProcessInfo.processInfo.systemUptime
         defer {
-            if !resting {
-                noteMotion()
+            if !resting { noteMotion() }
+            if !still {
                 barMotionCount &+= 1
+                stillSince = nil
             }
             captionLooks.noteBars(resting: resting, at: now)
         }
@@ -641,11 +644,15 @@ final class MissionControlLabels {
                 keptToThisDesktop = true
                 overlay.showOnEveryDesktop(false)
             }
-            if current <= 0, swipe.state == .idle, slide == nil, shift == nil, grow == nil, pendingGrow == nil,
-               reflow == nil, drag == nil, swipe.pressedAt == nil, !layouts.isEmpty {
-                resting = true
-                captureIfSettled(layouts, now: now)
-                captureStripsIfDue(layouts, selected: reading.selected)
+            if current <= Self.restSlack, swipe.state == .idle, slide == nil, shift == nil, grow == nil,
+               pendingGrow == nil, reflow == nil, drag == nil, swipe.pressedAt == nil, !layouts.isEmpty {
+                still = true
+                if stillSince == nil { stillSince = now }
+                if current <= 0 {
+                    resting = true
+                    captureIfSettled(layouts, now: now)
+                }
+                captureStripsIfDue(layouts, selected: reading.selected, now: now)
             }
         }
     }
@@ -693,6 +700,7 @@ final class MissionControlLabels {
                     }
                 }
                 noteThumbnailsResizing(from: shownLayouts, to: reading.layouts)
+                noteBarsMoving(from: shownLayouts, to: reading.layouts)
                 shownLayouts = reading.layouts
             }
         }
@@ -713,6 +721,17 @@ final class MissionControlLabels {
                 && old.first { $0.screen == bar.screen }.map { bar.thumbnailsMoved(since: $0) } == true
         }
         if resizing { noteMotion() }
+    }
+
+    /// Bars reported away from where they were last, as when the Dock moves one a little within `restSlack` of fully
+    /// in: a strip's capture under way may have caught them moving, and the next waits for them to be still again.
+    private func noteBarsMoving(from old: [BarLayout], to new: [BarLayout]) {
+        let moving = new.contains { bar in
+            old.first { $0.screen == bar.screen }.map { !$0.isWhereMeasured(now: bar.frame) } == true
+        }
+        guard moving else { return }
+        barMotionCount &+= 1
+        stillSince = nil
     }
 
     /// Learns, each frame, which expanded bars magnify from the Dock's latest report of them, while nothing

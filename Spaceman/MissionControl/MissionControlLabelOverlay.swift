@@ -24,7 +24,8 @@ import AppKit
 /// A name label to draw, centred on `centre` on the screen whose frame is `screen`. Both are in
 /// AX coordinates: origin at the top-left of the primary display, y down. With a `look`, or on a
 /// magnifying bar a `strip` face, the label is drawn to match the native caption it covers, with its
-/// top-left at `lookOrigin`; otherwise as a box in its space's colour, or black for a space without one.
+/// top-left at `lookOrigin`; otherwise as a box: on a `plate`, or in its space's colour, or black for a
+/// space without one.
 struct MissionControlLabel {
     let name: String
     let covers: String
@@ -34,6 +35,7 @@ struct MissionControlLabel {
     let screen: CGRect
     var look: NativeCaptionLook.Variant?
     var strip: StripFace?
+    var plate: LabelPlate?
     var lookOrigin: CGPoint?
     /// The height of the bar the label is on: how far a retraction of 1 moves it up.
     var barHeight: CGFloat = 0
@@ -43,6 +45,13 @@ struct MissionControlLabel {
     var grow: TimedMove?
     /// Which label this is, its space's, for the debug recording.
     var key = ""
+}
+
+/// A plain plate a label's box is drawn on, with its name in the native caption's text: the bar's colour, and the
+/// text's.
+struct LabelPlate: Equatable {
+    let fill: CGColor
+    let text: CGColor
 }
 
 /// Where a shown label is on screen at a moment, in AX coordinates, for the debug recording.
@@ -387,6 +396,7 @@ private final class LabelLayer: CALayer {
         let maxWidth: CGFloat
         let colorHex: String?
         let style: Style
+        let plate: LabelPlate?
     }
 
     /// The label's key, for the debug recording.
@@ -408,6 +418,7 @@ private final class LabelLayer: CALayer {
     /// Room either side of the name inside the box, as the text field this replaced left.
     private static let textInset: CGFloat = 2
     private static let font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+    private static let plateFont = NSFont.systemFont(ofSize: MissionControlCaptionLook.nativeFontSize)
 
     /// Labels jump to each frame's place: no implicit animation of anything they change.
     private static let noActions: [String: CAAction] = [
@@ -416,7 +427,9 @@ private final class LabelLayer: CALayer {
         "contentsScale": NSNull(), "string": NSNull(), "foregroundColor": NSNull(), "contentsRect": NSNull(),
     ]
 
-    static var height: CGFloat {
+    static var height: CGFloat { height(of: font) }
+
+    private static func height(of font: NSFont) -> CGFloat {
         ceil(font.ascender - font.descender + font.leading) + padding.height * 2
     }
 
@@ -482,12 +495,19 @@ private final class LabelLayer: CALayer {
         }
         let wanted = Content(
             name: label.name, covers: label.covers, maxWidth: label.maxWidth,
-            colorHex: label.colorHex, style: style)
+            colorHex: label.colorHex, style: style, plate: label.plate)
         guard wanted != content else { return }
         content = wanted
 
         text.string = label.name
-        if let hex = label.colorHex, let color = NSColor.fromHex(hex) {
+        let font = label.plate == nil ? Self.font : Self.plateFont
+        let height = Self.height(of: font)
+        text.font = font
+        text.fontSize = font.pointSize
+        if let plate = label.plate {
+            backgroundColor = plate.fill
+            text.foregroundColor = plate.text
+        } else if let hex = label.colorHex, let color = NSColor.fromHex(hex) {
             backgroundColor = color.cgColor
             text.foregroundColor = color.contrastingTextColor.cgColor
         } else {
@@ -495,17 +515,17 @@ private final class LabelLayer: CALayer {
             text.foregroundColor = NSColor.white.cgColor
         }
         let iconStyle = IconStyle(rawValue: style.decoration) ?? .filledRounded
-        cornerRadius = iconStyle.cornerRadius(for: NSRect(x: 0, y: 0, width: 0, height: Self.height))
+        cornerRadius = label.plate != nil ? 0
+            : iconStyle.cornerRadius(for: NSRect(x: 0, y: 0, width: 0, height: height))
 
-        let attrs: [NSAttributedString.Key: Any] = [.font: Self.font]
+        let attrs: [NSAttributedString.Key: Any] = [.font: font]
         let nameWidth = (label.name as NSString).size(withAttributes: attrs).width
         let coversWidth = (label.covers as NSString).size(withAttributes: attrs).width
         let width = min(
             ceil(max(nameWidth, coversWidth) + Self.textInset * 2) + Self.padding.width * 2, label.maxWidth)
-        bounds = CGRect(x: 0, y: 0, width: width, height: Self.height)
+        bounds = CGRect(x: 0, y: 0, width: width, height: height)
         // A text layer draws its line from the top: this centres it in the box as the text field did.
-        text.frame = CGRect(
-            x: 0, y: Self.padding.height, width: width, height: Self.height - Self.padding.height * 2)
+        text.frame = CGRect(x: 0, y: Self.padding.height, width: width, height: height - Self.padding.height * 2)
     }
 
     /// Shows `face`: its strip as the layer's contents, cropped to the part behind the label, under its name and pill.

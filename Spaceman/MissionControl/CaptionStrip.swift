@@ -19,8 +19,8 @@ struct CaptionStrip {
         let color: CGColor
     }
 
-    /// The current space's pill, in points: how far it reaches beyond the text's ink either side, and above and
-    /// below the baseline.
+    /// The current space's pill, in points: how far it reaches beyond the text's ink on its wider side, and above
+    /// and below the baseline.
     struct PillStyle: Hashable {
         let padding: CGFloat
         let above: CGFloat
@@ -37,9 +37,11 @@ struct CaptionStrip {
     /// The bar, its left edge the screen's, at `scale` pixels to the point.
     let image: CGImage
     let scale: CGFloat
-    /// The strip's top below the bar's top, and the captions' baseline below the strip's top, in points.
+    /// The strip's top below the screen's top, and the captions' baseline below the strip's top, in points.
     let top: CGFloat
     let baseline: CGFloat
+    /// How far right of its thumbnail's middle macOS centres a caption's line of text, in points.
+    let lineOffset: CGFloat
     /// The text of the caption erased from it, and its pill, if it was the current space's.
     let text: TextStyle
     let pill: PillStyle?
@@ -47,6 +49,9 @@ struct CaptionStrip {
     let background: String
 
     var height: CGFloat { CGFloat(image.height) / scale }
+
+    /// The text colour where none was measured: about the native captions' on a dark bar.
+    static let unmeasuredText = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
 
     /// Where a strip is kept: by display, the screen's size in points and the bar's height. Those decide how deep in
     /// the bar the captions sit and what lies behind them; the number of thumbnails doesn't, so 16 desktops and 17
@@ -58,8 +63,38 @@ struct CaptionStrip {
     /// This strip, taking `older`'s pill where it measured none and `older` was captured over the same background.
     func keepingPill(of older: CaptionStrip?) -> CaptionStrip {
         guard pill == nil, let older, older.background == background, let kept = older.pill else { return self }
-        return CaptionStrip(image: image, scale: scale, top: top, baseline: baseline, text: text, pill: kept,
-                            background: background)
+        return CaptionStrip(image: image, scale: scale, top: top, baseline: baseline, lineOffset: lineOffset,
+                            text: text, pill: kept, background: background)
+    }
+
+    /// How far apart, 0-255 in sRGB, two captures' colours may be and still agree, and their text sizes in points.
+    static let colorAgreement: CGFloat = 10
+    static let sizeAgreement: CGFloat = 0.5
+
+    /// Whether `other` measured the captions as this did: text of the same size and colour, and pills of the same
+    /// colour where both measured one. A capture taken as a caption faded in or out measures them dimmer.
+    func agrees(with other: CaptionStrip) -> Bool {
+        guard abs(text.fontSize - other.text.fontSize) <= Self.sizeAgreement,
+              Self.colorsAgree(text.color, other.text.color)
+        else { return false }
+        guard let pill, let otherPill = other.pill else { return true }
+        return Self.colorsAgree(pill.color, otherPill.color)
+    }
+
+    private static func colorsAgree(_ first: CGColor, _ second: CGColor) -> Bool {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let one = first.converted(to: space, intent: .defaultIntent, options: nil)?.components,
+              let two = second.converted(to: space, intent: .defaultIntent, options: nil)?.components,
+              one.count >= 3, two.count >= 3
+        else { return false }
+        let distance = (0..<3).map { pow((one[$0] - two[$0]) * 255, 2) }.reduce(0, +).squareRoot()
+        return distance <= colorAgreement
+    }
+
+    /// Where the ink of the native caption under the thumbnail whose middle is at `thumbnailMidX` sits, given how far
+    /// right of the middle of its advance its ink's middle lies.
+    func inkCentre(underThumbnailAt thumbnailMidX: CGFloat, inkOffset: CGFloat) -> CGFloat {
+        thumbnailMidX + lineOffset + inkOffset
     }
 
     /// How labels are drawn from `strip`: in its caption's text, or until a caption has been measured, the native
@@ -67,8 +102,7 @@ struct CaptionStrip {
     /// the strip's, or else the native pill in the pill colour `measured` on the screen; none if neither is known.
     static func style(of strip: CaptionStrip?, measured: CaptionLooks.Colors) -> Style {
         let text = strip?.text ?? TextStyle(
-            fontSize: MissionControlCaptionLook.nativeFontSize,
-            color: measured.text ?? CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+            fontSize: MissionControlCaptionLook.nativeFontSize, color: measured.text ?? unmeasuredText)
         let pill = strip?.pill ?? measured.pill.map {
             PillStyle(padding: MissionControlCaptionLook.pillPadding, above: MissionControlCaptionLook.bandAbove,
                       below: MissionControlCaptionLook.bandBelow, color: $0)
@@ -86,15 +120,16 @@ struct CaptionStrip {
                 CGRect(x: left / imageWidth, y: 0, width: width * scale / imageWidth, height: 1))
     }
 
-    /// A label drawn from this strip: as tall as the strip and wide enough to hide the native caption, `coversWidth`
-    /// of ink, in its pill and to hold `name`, with the name on the captions' baseline and, for the current space, a
-    /// pill half a pixel larger all round than the native one would be.
+    /// A label drawn from this strip, centred on the native caption's ink: as tall as the strip and wide enough to hide
+    /// that caption, `coversWidth` of ink, in its pill with 2 pixels more either side, and to hold `name`; with the
+    /// name on the captions' baseline and, for the current space, a pill half a pixel larger all round than the native
+    /// one would be.
     func layout(name: NameImage, coversWidth: CGFloat, style: Style, current: Bool) -> StripFace.Layout {
         let pixel = 1 / scale
         func snapped(_ points: CGFloat) -> CGFloat { (points * scale).rounded() / scale }
         let padding = style.pill?.padding ?? MissionControlCaptionLook.pillPadding
         let content = max(name.inkWidth, coversWidth) + 2 * padding
-        let width = ((content + 2 * pixel) * scale).rounded(.up) / scale
+        let width = ((content + 5 * pixel) * scale).rounded(.up) / scale
         let nameFrame = CGRect(
             origin: CGPoint(x: snapped(width / 2 - name.inkMidX), y: snapped(baseline - name.baseline)),
             size: name.size)
@@ -170,7 +205,7 @@ struct NameImage {
     }
 }
 
-/// The names drawn over strips, each rendered once in a text style at a scale, and the native captions' ink widths.
+/// The names drawn over strips, each rendered once in a text style at a scale, and the native captions' ink.
 struct StripNames {
 
     private struct Key: Hashable {
@@ -188,7 +223,13 @@ struct StripNames {
     private static let limit = 512
 
     private var images: [Key: NameImage] = [:]
-    private var inkWidths: [InkKey: CGFloat] = [:]
+    private var inks: [InkKey: Ink] = [:]
+
+    /// A native caption's ink: its width, and how far right of the middle of its advance its middle lies.
+    struct Ink {
+        let width: CGFloat
+        let offset: CGFloat
+    }
 
     mutating func image(for name: String, style: CaptionStrip.TextStyle, scale: CGFloat) -> NameImage? {
         let key = Key(text: name, style: style, scale: scale)
@@ -199,12 +240,13 @@ struct StripNames {
         return image
     }
 
-    mutating func inkWidth(of text: String, style: CaptionStrip.TextStyle) -> CGFloat {
+    mutating func ink(of text: String, style: CaptionStrip.TextStyle) -> Ink {
         let key = InkKey(text: text, fontSize: style.fontSize)
-        if let width = inkWidths[key] { return width }
-        let width = MissionControlCaptionLook.inkBounds(of: text, size: style.fontSize).width
-        if inkWidths.count >= Self.limit { inkWidths = [:] }
-        inkWidths[key] = width
-        return width
+        if let ink = inks[key] { return ink }
+        let ink = Ink(width: MissionControlCaptionLook.inkBounds(of: text, size: style.fontSize).width,
+                      offset: MissionControlCaptionLook.inkOffset(of: text, size: style.fontSize))
+        if inks.count >= Self.limit { inks = [:] }
+        inks[key] = ink
+        return ink
     }
 }

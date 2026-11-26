@@ -44,8 +44,7 @@ extension MissionControlLabels {
             shownByBar.append((bar, shown))
             let ridingGrow = growing.map { frameTime < $0.reference + DockMotion.expand.delay + Self.growCaptionFade }
             let magnifies = matching && magnification.magnifies(bar)
-            let strip = magnifies ? captionStrips.strip(for: bar) : nil
-            let style = magnifies ? stripStyle(for: bar, strip: strip) : nil
+            let drawing = magnifies ? stripDrawing(for: bar, shown: shown, at: frameTime) : nil
             for caption in bar.captions {
                 // A label macOS draws no caption for goes; one riding the grow from the names goes once the
                 // caption it covers has half faded.
@@ -54,8 +53,8 @@ extension MissionControlLabels {
                 // Covered by the zoom to another desktop, as the Dock's caption is.
                 if let cover = zoomCover, zoom?.screen == bar.screen, cover.contains(centre) { continue }
                 let source = matching ? Self.lookSource(
-                    for: caption, on: bar, magnifies: magnifies, strips: captionStrips, looks: &captionLooks)
-                    : .fallback
+                    for: caption, on: bar, strip: drawing, ridingGrow: ridingGrow == true, looks: &captionLooks)
+                    : .fallback(nil)
                 if case .awaited = source { continue }
                 var dragged: TimedMove?
                 if let drag, drag.screen == bar.screen {
@@ -89,7 +88,8 @@ extension MissionControlLabels {
                 let current = Self.isCurrent(
                     caption, selected: selectedPlace, on: measured, currentSpaceIDs: currentSpaceIDs)
                 let plain = Self.label(for: caption, centre: centre, screen: bar.screen, look: nil)
-                guard var label = dressed(plain, from: source, current: current, style: style) else { continue }
+                guard var label = dressed(plain, from: source, current: current, style: drawing?.style)
+                else { continue }
                 label.barHeight = bar.frame.height
                 label.shift = sliding
                 label.grow = moving
@@ -114,8 +114,9 @@ extension MissionControlLabels {
         case captured(FoundLook)
         /// None yet: macOS's own caption shows until one arrives.
         case awaited
-        /// None will arrive: it is drawn in the fallback style, so the name still shows.
-        case fallback
+        /// None will arrive in time: drawn plainly, so the name still shows, on a plate of the bar's colour where
+        /// that is known, else as a box in its space's colour.
+        case fallback(LabelPlate?)
 
         var captured: FoundLook? {
             if case .captured(let found) = self { return found }
@@ -123,17 +124,19 @@ extension MissionControlLabels {
         }
     }
 
-    /// Where `caption`'s look comes from on `bar`, in the native look. On a bar that `magnifies`, its strip, whatever
-    /// thumbnail it is under, with no capture of the caption itself; elsewhere a capture of the caption.
+    /// Where `caption`'s look comes from on `bar`, in the native look. On a magnifying bar, drawn as `strip` has it,
+    /// whatever thumbnail it is under, with no capture of the caption itself; elsewhere, and while it rides the grow
+    /// from the names, a capture of the caption.
     static func lookSource(
-        for caption: Caption, on bar: BarLayout, magnifies: Bool, strips: CaptionStrips, looks: inout CaptionLooks
+        for caption: Caption, on bar: BarLayout, strip drawing: StripDrawing?, ridingGrow: Bool,
+        looks: inout CaptionLooks
     ) -> LookSource {
-        if magnifies {
-            if let strip = strips.strip(for: bar) { return .strip(strip) }
-            return strips.mayArrive(for: bar) ? .awaited : .fallback
+        if let drawing, !ridingGrow {
+            if let strip = drawing.strip { return .strip(strip) }
+            return drawing.awaited ? .awaited : .fallback(drawing.plate)
         }
         if let found = looks.look(for: caption, on: bar) { return .captured(found) }
-        return looks.lookMayArrive(for: caption, on: bar) ? .awaited : .fallback
+        return looks.lookMayArrive(for: caption, on: bar) ? .awaited : .fallback(nil)
     }
 
     /// `label` with its look from `source`, as the current space's or not, placed as high as the native caption sits
@@ -154,7 +157,9 @@ extension MissionControlLabels {
             dressed.look = found.look.variant(current: current)
             // Whichever thumbnail the native caption was found under.
             dressed.lookOrigin = dressed.look.map { CGPoint(x: label.centre.x + $0.frame.minX, y: barTop + $0.top) }
-        case .awaited, .fallback:
+        case .fallback(let plate):
+            dressed.plate = plate
+        case .awaited:
             break
         }
         return dressed

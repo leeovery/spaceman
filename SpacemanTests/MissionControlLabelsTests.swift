@@ -1419,9 +1419,19 @@ final class MissionControlLabelsTests: XCTestCase {
         return (mix(rowLeft.0, rowRight.0), mix(rowLeft.1, rowRight.1), mix(rowLeft.2, rowRight.2))
     }
 
+    private func textAttributes(alpha: CGFloat = 1) -> [NSAttributedString.Key: Any] {
+        [.font: NSFont.systemFont(ofSize: 14),
+         NSAttributedString.Key(kCTForegroundColorAttributeName as String): cgColor(textColor).copy(alpha: alpha) ?? 0]
+    }
+
     /// A 2x capture of a magnifying bar's caption row, 400x60pt: bar blending across the screen and, unless
-    /// `caption` is false, "Desktop 9" centred at x = 300 on a baseline 50pt down, in the pill when `inPill`.
-    private func magnifyingRow(caption: Bool = true, inPill: Bool = false) throws -> CGImage {
+    /// `caption` is false, "Desktop 9" on a baseline 50pt down, its ink centred at x = 300 or its advance at
+    /// `advanceCentre`; in the pill when `inPill`, reaching `pillRight` beyond the text on the right. With `ghostAt`,
+    /// "Desktop 8" fading out there.
+    private func magnifyingRow(
+        caption: Bool = true, inPill: Bool = false, pillRight: CGFloat = 11.5, advanceCentre: CGFloat? = nil,
+        ghostAt: CGFloat? = nil
+    ) throws -> CGImage {
         let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
         let context = try XCTUnwrap(CGContext(
             data: nil, width: 800, height: 120, bitsPerComponent: 8, bytesPerRow: 800 * 4, space: space,
@@ -1431,35 +1441,51 @@ final class MissionControlLabelsTests: XCTestCase {
             context.setFillColor(cgColor(rowColor(at: (CGFloat(x) + 0.5) / 2)))
             context.fill(CGRect(x: CGFloat(x) / 2, y: 0, width: 0.5, height: 60))
         }
-        guard caption else { return try XCTUnwrap(context.makeImage()) }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 14),
-            NSAttributedString.Key(kCTForegroundColorAttributeName as String): cgColor(textColor),
-        ]
-        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "Desktop 9", attributes: attributes))
-        let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
         let baseline: CGFloat = 10  // 50pt down from the top, measured from the bottom
+        if let ghostAt {
+            let ghost = CTLineCreateWithAttributedString(
+                NSAttributedString(string: "Desktop 8", attributes: textAttributes(alpha: 0.7)))
+            context.textPosition = CGPoint(x: ghostAt - CTLineGetBoundsWithOptions(ghost, .useGlyphPathBounds).midX,
+                                           y: baseline)
+            CTLineDraw(ghost, context)
+        }
+        guard caption else { return try XCTUnwrap(context.makeImage()) }
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: "Desktop 9", attributes: textAttributes()))
+        let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+        let left = advanceCentre.map { $0 - CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) / 2 }
+            ?? 300 - ink.midX
         if inPill {
-            let pill = CGRect(x: 300 - ink.width / 2 - 11.5, y: baseline - 7, width: ink.width + 23, height: 24)
+            let pill = CGRect(x: left + ink.minX - 11.5, y: baseline - 7, width: ink.width + 11.5 + pillRight,
+                              height: 24)
             context.setFillColor(cgColor(pillColor))
             context.addPath(CGPath(roundedRect: pill, cornerWidth: 6, cornerHeight: 6, transform: nil))
             context.fillPath()
         }
-        context.textPosition = CGPoint(x: 300 - ink.midX, y: baseline)
+        context.textPosition = CGPoint(x: left, y: baseline)
         CTLineDraw(line, context)
         return try XCTUnwrap(context.makeImage())
     }
 
-    /// The Dock puts the hovered caption's centre 45pt down; its text sits on a baseline 50pt down.
+    /// The Dock puts the hovered caption's centre 45pt down, under the middle of its thumbnail at x = 300; its text
+    /// sits on a baseline 50pt down.
     private let hoveredInRow = CaptionToMatch(
         key: "row", centre: CGPoint(x: 300, y: 45), barTop: 0, barBottom: 58, maxWidth: 260, covers: "Desktop 9",
         name: "")
 
+    private func capturedRow(_ image: CGImage) -> MissionControlCaptionLook.StripCapture {
+        MissionControlCaptionLook.strip(in: image, origin: .zero, scale: 2, hovered: hoveredInRow, background: "hills")
+    }
+
     private func stripOfRow(_ image: CGImage) throws -> CaptionStrip {
-        let captured = MissionControlCaptionLook.strip(
-            in: image, origin: .zero, scale: 2, hovered: hoveredInRow, background: "hills")
+        let captured = capturedRow(image)
         if case .strip(let strip) = captured { return strip }
         return try XCTUnwrap(nil as CaptionStrip?, "no strip: \(captured)")
+    }
+
+    private func missOfRow(_ image: CGImage) -> String? {
+        if case .missed(let reason) = capturedRow(image) { return reason }
+        return nil
     }
 
     private func components(_ color: CGColor) throws -> (Int, Int, Int) {
@@ -1472,7 +1498,7 @@ final class MissionControlLabelsTests: XCTestCase {
     func testAStripIsTheCaptionRowAcrossTheScreenWithItsOneCaptionErased() throws {
         let row = try magnifyingRow()
         let strip = try stripOfRow(row)
-        // 18pt above the baseline and 8pt below, across the whole capture.
+        // 18pt above the baseline and 8pt below, across the whole capture, its top below the screen's.
         XCTAssertEqual(strip.image.width, 800)
         XCTAssertEqual(strip.top, 32, accuracy: 0.01)
         XCTAssertEqual(strip.height, 26, accuracy: 0.01)
@@ -1507,14 +1533,43 @@ final class MissionControlLabelsTests: XCTestCase {
         assertColor(try pixels(strip.image)[strip.image.height / 2][520], rowColor(at: 260.25))
     }
 
-    func testARowWithNoCaptionGivesNoStrip() throws {
-        let captured = MissionControlCaptionLook.strip(
-            in: try magnifyingRow(caption: false), origin: .zero, scale: 2, hovered: hoveredInRow, background: "")
-        guard case .missed = captured else { return XCTFail("a strip with no caption to measure") }
+    /// Side bearings can sit the text off the pill's middle: the pill is drawn as wide as its wider side either side.
+    func testAPillsPaddingIsItsWiderSide() throws {
+        let strip = try stripOfRow(try magnifyingRow(inPill: true, pillRight: 13.5))
+        XCTAssertEqual(try XCTUnwrap(strip.pill).padding, 13.5, accuracy: 0.5)
     }
 
-    /// A strip 400pt across at 2x, `height` points tall, over `background`.
-    private func strip(height: CGFloat = 26, background: String = "hills", pill: Bool = false) throws -> CaptionStrip {
+    func testARowWithNoCaptionGivesNoStrip() throws {
+        XCTAssertNotNil(missOfRow(try magnifyingRow(caption: false)))
+    }
+
+    /// A neighbour's caption caught fading out would be baked into the strip.
+    func testTextLeftBesideTheCaptionRejectsTheStrip() throws {
+        XCTAssertEqual(missOfRow(try magnifyingRow(ghostAt: 120)), "text left beside the caption")
+    }
+
+    /// macOS centres the line of text on the thumbnail, by its advance: where its ink falls differs by caption.
+    func testAStripMeasuresWhereMacOSCentresTheLineAndPlacesOtherCaptionsBy() throws {
+        let strip = try stripOfRow(try magnifyingRow(advanceCentre: 303))
+        XCTAssertEqual(strip.lineOffset, 3, accuracy: 0.5)
+        let offset = MissionControlCaptionLook.inkOffset(of: "Desktop 12", size: 14)
+        XCTAssertEqual(strip.inkCentre(underThumbnailAt: 500, inkOffset: offset), 500 + strip.lineOffset + offset)
+    }
+
+    func testACaptionFarOffItsThumbnailsMiddleWasCaughtMovingAndGivesNoStrip() throws {
+        XCTAssertEqual(missOfRow(try magnifyingRow(advanceCentre: 312))?.hasSuffix("off its thumbnail's middle"), true)
+    }
+
+    func testTheBarsColourIsMeasuredBesideEachCaption() throws {
+        let looks = try matchSyntheticBar()
+        assertColor(try components(try XCTUnwrap(looks["other"]?.barColor)), barColor)
+        assertColor(try components(try XCTUnwrap(looks["current"]?.barColor)), barColor)
+    }
+
+    /// A strip 400pt across at 2x, `height` points tall, over `background`, its text in `text`.
+    private func strip(
+        height: CGFloat = 26, background: String = "hills", pill: Bool = false, text: (Int, Int, Int)? = nil
+    ) throws -> CaptionStrip {
         let context = try XCTUnwrap(CGContext(
             data: nil, width: 800, height: Int(height * 2), bitsPerComponent: 8, bytesPerRow: 800 * 4,
             space: try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB)),
@@ -1522,8 +1577,8 @@ final class MissionControlLabelsTests: XCTestCase {
         context.setFillColor(cgColor(barColor))
         context.fill(CGRect(x: 0, y: 0, width: 800, height: Int(height * 2)))
         return CaptionStrip(
-            image: try XCTUnwrap(context.makeImage()), scale: 2, top: 116, baseline: 18,
-            text: CaptionStrip.TextStyle(fontSize: 14, color: cgColor(textColor)),
+            image: try XCTUnwrap(context.makeImage()), scale: 2, top: 116, baseline: 18, lineOffset: 0.5,
+            text: CaptionStrip.TextStyle(fontSize: 14, color: cgColor(text ?? textColor)),
             pill: pill ? CaptionStrip.PillStyle(padding: 11.5, above: 17, below: 7, color: cgColor(pillColor)) : nil,
             background: background)
     }
@@ -1557,7 +1612,9 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(pill.frame.minY, 18 - 17 - 0.25, accuracy: 0.01)
         XCTAssertEqual(pill.frame.height, 24.5, accuracy: 0.01)
         XCTAssertEqual(pill.frame.midX, current.size.width / 2, accuracy: 0.01)
-        XCTAssertGreaterThanOrEqual(current.size.width, pill.frame.width + 0.5)
+        // At least 2 pixels beyond the pill either side.
+        XCTAssertGreaterThanOrEqual(pill.frame.minX, 1)
+        XCTAssertLessThanOrEqual(pill.frame.maxX, current.size.width - 1)
         XCTAssertEqual(current.size.height, 26)
         XCTAssertEqual(current.nameFrame.minX + name.inkMidX, current.size.width / 2, accuracy: 0.25)
         XCTAssertEqual(current.nameFrame.minY + name.baseline, 18, accuracy: 0.25)
@@ -1565,6 +1622,10 @@ final class MissionControlLabelsTests: XCTestCase {
         let plain = strip.layout(name: name, coversWidth: covers, style: style, current: false)
         XCTAssertNil(plain.pill)
         XCTAssertEqual(plain.size, current.size)
+        // Each caption's own native text: a wider one widens the label.
+        let wider = MissionControlCaptionLook.inkBounds(of: "Desktop 16", size: 14).width
+        XCTAssertGreaterThan(strip.layout(name: name, coversWidth: wider, style: style, current: true).size.width,
+                             current.size.width)
         // A name wider than the native caption widens the label to hold it.
         let long = try XCTUnwrap(NameImage.render("A much longer name", style: strip.text, scale: 2))
         let wide = strip.layout(name: long, coversWidth: covers, style: style, current: true)
@@ -1580,13 +1641,30 @@ final class MissionControlLabelsTests: XCTestCase {
         assertColor(try XCTUnwrap(brightest), textColor)
     }
 
+    // MARK: Strips that agree
+
+    func testStripsAgreeOnTextOfTheSameSizeAndColourAndPillsOfTheSameColour() throws {
+        let strip = try strip(pill: true)
+        XCTAssertTrue(strip.agrees(with: try self.strip(text: (241, 242, 250))))
+        XCTAssertFalse(strip.agrees(with: try self.strip(text: (200, 200, 210))))
+        let otherPill = CaptionStrip(
+            image: strip.image, scale: 2, top: 116, baseline: 18, lineOffset: 0.5, text: strip.text,
+            pill: .init(padding: 11.5, above: 17, below: 7, color: cgColor((30, 30, 120))), background: "hills")
+        XCTAssertFalse(strip.agrees(with: otherPill))
+        let bigger = CaptionStrip(
+            image: strip.image, scale: 2, top: 116, baseline: 18, lineOffset: 0.5,
+            text: .init(fontSize: 15, color: cgColor(textColor)), pill: nil, background: "hills")
+        XCTAssertFalse(strip.agrees(with: bigger))
+    }
+
     // MARK: Style before a caption is measured
 
     private let namesRowText = (230, 230, 240)
     private let namesRowPill = (40, 90, 200)
 
     func testUntilACaptionIsMeasuredLabelsTakeTheNativeTextInTheColourMeasuredOnTheScreen() throws {
-        let style = CaptionStrip.style(of: nil, measured: (cgColor(namesRowText), cgColor(namesRowPill)))
+        let style = CaptionStrip.style(
+            of: nil, measured: CaptionLooks.Colors(text: cgColor(namesRowText), pill: cgColor(namesRowPill)))
         XCTAssertEqual(style.text.fontSize, 14)
         assertColor(try components(style.text.color), namesRowText)
         let pill = try XCTUnwrap(style.pill)
@@ -1595,46 +1673,52 @@ final class MissionControlLabelsTests: XCTestCase {
     }
 
     func testWithNothingMeasuredLabelsAreWhiteWithNoPill() throws {
-        let style = CaptionStrip.style(of: nil, measured: (nil, nil))
+        let style = CaptionStrip.style(of: nil, measured: CaptionLooks.Colors())
         assertColor(try components(style.text.color), (255, 255, 255))
         XCTAssertNil(style.pill)
     }
 
     func testAStripWithoutAPillTakesTheColourOfOneMeasuredOnTheScreen() throws {
         let strip = try strip()
-        let style = CaptionStrip.style(of: strip, measured: (cgColor(namesRowText), cgColor(namesRowPill)))
+        let style = CaptionStrip.style(
+            of: strip, measured: CaptionLooks.Colors(text: cgColor(namesRowText), pill: cgColor(namesRowPill)))
         XCTAssertEqual(style.text, strip.text)
         assertColor(try components(try XCTUnwrap(style.pill?.color)), namesRowPill)
     }
 
     func testAStripsOwnPillIsUsedOnceMeasured() throws {
         let strip = try strip(pill: true)
-        XCTAssertEqual(CaptionStrip.style(of: strip, measured: (nil, cgColor(namesRowPill))).pill, strip.pill)
+        XCTAssertEqual(CaptionStrip.style(of: strip, measured: CaptionLooks.Colors(pill: cgColor(namesRowPill))).pill,
+                       strip.pill)
     }
 
     func testColoursMeasuredOnAScreenComeFromItsBarAtThatHeightFirstThenTheNamesRow() throws {
         var looks = CaptionLooks()
         let names = mainBar
         let expanded = bar(primary, height: 146, [caption(3, "Docs")])
-        func colored(_ text: (Int, Int, Int), pill: (Int, Int, Int)?) throws -> NativeCaptionLook {
+        func colored(_ text: (Int, Int, Int), pill: (Int, Int, Int)?, bar: (Int, Int, Int)) throws
+            -> NativeCaptionLook {
             var made = try look(top: 7.5)
             made.textColor = cgColor(text)
             made.pillColor = pill.map(cgColor)
+            made.barColor = cgColor(bar)
             return made
         }
         let namesLooks = [CaptionLooks.keys(bar: names, caption: mail).exact:
-                            try colored(namesRowText, pill: namesRowPill)]
+                            try colored(namesRowText, pill: namesRowPill, bar: (10, 10, 40))]
         _ = looks.finish(looks.capture(of: [names], attempt: 1), CaptionLooks.Result(found: namesLooks), moved: false)
         var colors = looks.measuredColors(onScreen: primaryKey, height: 146)
         assertColor(try components(try XCTUnwrap(colors.text)), namesRowText)
         assertColor(try components(try XCTUnwrap(colors.pill)), namesRowPill)
+        assertColor(try components(try XCTUnwrap(colors.bar)), (10, 10, 40))
         let expandedLooks = [CaptionLooks.keys(bar: expanded, caption: caption(3, "Docs")).exact:
-                                try colored(textColor, pill: nil)]
+                                try colored(textColor, pill: nil, bar: barColor)]
         _ = looks.finish(looks.capture(of: [expanded], attempt: 1), CaptionLooks.Result(found: expandedLooks),
                          moved: false)
         colors = looks.measuredColors(onScreen: primaryKey, height: 146)
         assertColor(try components(try XCTUnwrap(colors.text)), textColor)
         assertColor(try components(try XCTUnwrap(colors.pill)), namesRowPill)
+        assertColor(try components(try XCTUnwrap(colors.bar)), barColor)
         XCTAssertNil(looks.measuredColors(onScreen: builtInKey, height: 146).text)
     }
 
@@ -1652,10 +1736,24 @@ final class MissionControlLabelsTests: XCTestCase {
 
     private var magnifiedKey: String { CaptionStrip.key(display: "PRIMARY", screen: primary.size, barHeight: 146) }
 
+    /// The magnified bar drawn at `time` with the thumbnail at `place` hovered, measured to have `colors`.
+    @discardableResult
+    private func drawn(_ strips: inout CaptionStrips, hovered place: Int?, at time: TimeInterval,
+                       colors: CaptionLooks.Colors = CaptionLooks.Colors()) -> StripDrawing {
+        strips.drawing(for: magnifiedBar, hovered: place, colors: { colors }, at: time)
+    }
+
+    /// A capture of the magnified bar's strip with the thumbnail at `place` hovered since `since`, at `time`.
+    private func capture(_ strips: inout CaptionStrips, hovered place: Int = 5, current: Bool = false,
+                         since: TimeInterval = 10, at time: TimeInterval = 10.2) -> CaptionStrips.Capture? {
+        drawn(&strips, hovered: place, at: since)
+        return strips.capture(key: magnifiedKey, hovered: place, current: current, at: time, stillSince: since)
+    }
+
     func testAStripIsKeptByDisplayScreenSizeAndBarHeightWhateverTheNumberOfThumbnails() {
         XCTAssertEqual(CaptionStrip.key(display: "PRIMARY", screen: primary.size, barHeight: 146.4),
                        "PRIMARY-2560x1440-146")
-        let strips = strips()
+        var strips = strips()
         XCTAssertEqual(strips.key(for: magnifiedBar), magnifiedKey)
         XCTAssertEqual(strips.key(for: thumbnailBar(count: 17)), magnifiedKey)
         XCTAssertNotEqual(strips.key(for: thumbnailBar(height: 150)), magnifiedKey)
@@ -1666,28 +1764,45 @@ final class MissionControlLabelsTests: XCTestCase {
     func testAMagnifyingBarsCaptionsAreDrawnFromItsStripWithNoCaptureOfTheirOwn() throws {
         var strips = strips()
         strips.adopt([magnifiedKey: try strip()])
+        let drawing = drawn(&strips, hovered: 5, at: 10)
         var looks = CaptionLooks()
         for caption in magnifiedBar.captions {
             let source = MissionControlLabels.lookSource(
-                for: caption, on: magnifiedBar, magnifies: true, strips: strips, looks: &looks)
+                for: caption, on: magnifiedBar, strip: drawing, ridingGrow: false, looks: &looks)
             guard case .strip(let strip) = source else { return XCTFail("\(caption.covers) not drawn from the strip") }
             XCTAssertEqual(strip.background, "hills")
         }
     }
 
-    func testABarThatDoesNotMagnifyIsNeverDrawnFromAStrip() throws {
+    /// Labels riding the grow from the names are names-row labels until their captions fade.
+    func testALabelRidingTheGrowIsNeverDrawnFromAStrip() throws {
         var strips = strips()
         strips.adopt([magnifiedKey: try strip()])
+        let drawing = drawn(&strips, hovered: 5, at: 10)
+        var looks = CaptionLooks()
+        let caption = magnifiedBar.captions[2]
+        guard case .awaited = MissionControlLabels.lookSource(
+            for: caption, on: magnifiedBar, strip: drawing, ridingGrow: true, looks: &looks)
+        else { return XCTFail("a label riding the grow waits for its caption's own capture") }
+        let found = [CaptionLooks.keys(bar: magnifiedBar, caption: caption).exact: try look(top: 127)]
+        _ = looks.finish(looks.capture(of: [magnifiedBar], attempt: 1), CaptionLooks.Result(found: found),
+                         moved: false)
+        guard case .captured = MissionControlLabels.lookSource(
+            for: caption, on: magnifiedBar, strip: drawing, ridingGrow: true, looks: &looks)
+        else { return XCTFail("a label riding the grow takes its caption's own capture") }
+    }
+
+    func testABarThatDoesNotMagnifyIsNeverDrawnFromAStrip() throws {
         let fifteen = thumbnailBar(count: 15)
         var looks = CaptionLooks()
         let caption = fifteen.captions[5]
         guard case .awaited = MissionControlLabels.lookSource(
-            for: caption, on: fifteen, magnifies: false, strips: strips, looks: &looks)
+            for: caption, on: fifteen, strip: nil, ridingGrow: false, looks: &looks)
         else { return XCTFail("a bar that doesn't magnify waits for its caption's own capture") }
         let found = [CaptionLooks.keys(bar: fifteen, caption: caption).exact: try look(top: 127)]
         _ = looks.finish(looks.capture(of: [fifteen], attempt: 1), CaptionLooks.Result(found: found), moved: false)
         guard case .captured(let captured) = MissionControlLabels.lookSource(
-            for: caption, on: fifteen, magnifies: false, strips: strips, looks: &looks)
+            for: caption, on: fifteen, strip: nil, ridingGrow: false, looks: &looks)
         else { return XCTFail("a bar that doesn't magnify takes its caption's own capture") }
         XCTAssertTrue(captured.exact)
     }
@@ -1702,79 +1817,172 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(captured.map(\.frame.height), [40, 146])
     }
 
-    func testWithoutAStripMacOSsCaptionShowsUntilItsCapturesHaveFailed() throws {
+    func testACaptureWaitsForTheHoverAndTheBarToSettle() throws {
         var strips = strips()
+        drawn(&strips, hovered: 5, at: 10)
+        XCTAssertNil(strips.capture(key: magnifiedKey, hovered: 5, current: false, at: 10.1, stillSince: 9))
+        XCTAssertNotNil(strips.capture(key: magnifiedKey, hovered: 5, current: false, at: 10.15, stillSince: 9))
+        XCTAssertNil(strips.capture(key: magnifiedKey, hovered: 5, current: false, at: 10.15, stillSince: 10.05))
+        drawn(&strips, hovered: 6, at: 10.2)
+        XCTAssertNil(strips.capture(key: magnifiedKey, hovered: 6, current: false, at: 10.3, stillSince: 9))
+        XCTAssertNotNil(strips.capture(key: magnifiedKey, hovered: 6, current: false, at: 10.35, stillSince: 9))
+    }
+
+    /// A strip that never lands must not leave macOS's caption showing all session.
+    func testEveryCaptureThatComesToNothingCountsAndWaitsBeforeTheNext() throws {
+        var strips = strips()
+        var time: TimeInterval = 10.2
+        let results: [(MissionControlCaptionLook.StripCapture?, Bool, CaptionStrips.Outcome)] = [
+            (nil, false, .failed), (.missed("contrast 12, not over 40"), false, .missed),
+            (.strip(try strip()), true, .moved), (nil, false, .failed),
+        ]
+        for (result, barMoved, expected) in results {
+            let capture = try XCTUnwrap(self.capture(&strips, at: time))
+            XCTAssertEqual(strips.finish(capture, result, barMoved: barMoved, at: time), expected)
+            XCTAssertNil(strips.capture(key: magnifiedKey, hovered: 5, current: false,
+                                        at: time + CaptionStrips.retryDelay - 0.01, stillSince: 10))
+            time += CaptionStrips.retryDelay
+        }
+        XCTAssertNil(self.capture(&strips, at: time))
+        strips.looksChanged()
+        let drawing = drawn(&strips, hovered: 5, at: time, colors: CaptionLooks.Colors(bar: cgColor(barColor)))
+        XCTAssertFalse(drawing.awaited)
         var looks = CaptionLooks()
-        let caption = magnifiedBar.captions[5]
-        func source() -> MissionControlLabels.LookSource {
-            MissionControlLabels.lookSource(for: caption, on: magnifiedBar, magnifies: true, strips: strips,
-                                            looks: &looks)
-        }
-        for _ in 0..<CaptionStrips.attemptLimit {
-            guard case .awaited = source() else { return XCTFail("the fallback before the strip's captures failed") }
-            let capture = try XCTUnwrap(strips.capture(of: magnifiedBar, hovered: 5, current: false))
-            XCTAssertEqual(strips.finish(capture, nil, moved: false), .failed)
-        }
-        guard case .fallback = source() else { return XCTFail("no name shown once the strip can't arrive") }
-        XCTAssertNil(strips.capture(of: magnifiedBar, hovered: 5, current: false))
+        guard case .fallback(let plate) = MissionControlLabels.lookSource(
+            for: magnifiedBar.captions[5], on: magnifiedBar, strip: drawing, ridingGrow: false, looks: &looks)
+        else { return XCTFail("no name shown once the strip can't arrive") }
+        assertColor(try components(try XCTUnwrap(plate?.fill)), barColor)
+    }
+
+    func testAMissIsTriedAgainUnderTheSameThumbnailAfterARest() throws {
+        var strips = strips()
+        let first = try XCTUnwrap(capture(&strips, hovered: 0))
+        XCTAssertEqual(strips.finish(first, .missed("cut off at the screen's edge"), barMoved: false, at: 10.2),
+                       .missed)
+        XCTAssertNotNil(strips.capture(key: magnifiedKey, hovered: 0, current: false,
+                                       at: 10.2 + CaptionStrips.retryDelay, stillSince: 10))
+    }
+
+    func testAnotherThumbnailHoveredWhileACaptureRunsMakesItMoved() throws {
+        var strips = strips()
+        let capture = try XCTUnwrap(capture(&strips))
+        drawn(&strips, hovered: 6, at: 10.25)
+        XCTAssertEqual(strips.finish(capture, .strip(try strip()), barMoved: false, at: 10.3), .moved)
+        XCTAssertNil(drawn(&strips, hovered: 6, at: 10.3).strip)
+    }
+
+    func testABarHoveredForASecondWithNoStripStopsWaitingForOne() {
+        var strips = strips()
+        XCTAssertTrue(drawn(&strips, hovered: 5, at: 10).awaited)
+        XCTAssertTrue(drawn(&strips, hovered: 5, at: 10.6).awaited)
+        // Off the bar, the wait stands still.
+        drawn(&strips, hovered: nil, at: 10.7)
+        drawn(&strips, hovered: nil, at: 15)
+        XCTAssertTrue(drawn(&strips, hovered: 6, at: 15.1).awaited)
+        XCTAssertTrue(drawn(&strips, hovered: 6, at: 15.49).awaited)
+        XCTAssertFalse(drawn(&strips, hovered: 6, at: 15.5).awaited)
+    }
+
+    func testAScreenWithNoKnownBackgroundFallsBackAtOnce() {
+        var strips = CaptionStrips()
+        strips.beginSession(backgrounds: [:], screens: [primaryInfo])
+        XCTAssertFalse(drawn(&strips, hovered: 5, at: 10).awaited)
+        XCTAssertNil(strips.capture(key: magnifiedKey, hovered: 5, current: false, at: 11, stillSince: 9))
+    }
+
+    func testAMagnifyingBarFallsBackToAPlateOfTheBarsColourInTheNativeText() throws {
+        let plate = try XCTUnwrap(CaptionStrips.plate(
+            from: CaptionLooks.Colors(text: cgColor(namesRowText), bar: cgColor(barColor))))
+        assertColor(try components(plate.fill), barColor)
+        assertColor(try components(plate.text), namesRowText)
+        XCTAssertNil(CaptionStrips.plate(from: CaptionLooks.Colors(text: cgColor(namesRowText))))
     }
 
     func testAStripCapturedOverAnotherBackgroundIsNotDrawn() throws {
         var strips = strips(background: "desert")
         strips.adopt([magnifiedKey: try strip(background: "hills")])
-        XCTAssertNil(strips.strip(for: magnifiedBar))
-        XCTAssertNotNil(strips.capture(of: magnifiedBar, hovered: 5, current: false))
+        XCTAssertNil(drawn(&strips, hovered: 5, at: 10).strip)
+        XCTAssertNotNil(capture(&strips))
     }
 
     func testAStripIsCapturedOnceASessionAndOnceMoreForThePill() throws {
         var strips = strips()
-        let first = try XCTUnwrap(strips.capture(of: magnifiedBar, hovered: 5, current: false))
-        XCTAssertEqual(strips.finish(first, .strip(try strip()), moved: false), .kept)
-        XCTAssertNil(strips.capture(of: magnifiedBar, hovered: 6, current: false))
-        let inPill = try XCTUnwrap(strips.capture(of: magnifiedBar, hovered: 2, current: true))
-        XCTAssertEqual(strips.finish(inPill, .strip(try strip(pill: true)), moved: false), .kept)
-        XCTAssertNotNil(strips.strip(for: magnifiedBar)?.pill)
-        XCTAssertNil(strips.capture(of: magnifiedBar, hovered: 2, current: true))
+        let first = try XCTUnwrap(capture(&strips))
+        XCTAssertEqual(strips.finish(first, .strip(try strip()), barMoved: false, at: 10.2), .kept)
+        XCTAssertNil(capture(&strips, hovered: 6, since: 11, at: 11.2))
+        let inPill = try XCTUnwrap(capture(&strips, hovered: 2, current: true, since: 12, at: 12.2))
+        XCTAssertEqual(strips.finish(inPill, .strip(try strip(pill: true)), barMoved: false, at: 12.2), .kept)
+        XCTAssertNotNil(drawn(&strips, hovered: 2, at: 12.3).strip?.pill)
+        XCTAssertNil(capture(&strips, hovered: 2, current: true, since: 12, at: 12.4))
         // A strip kept from before with its pill measured needs no capture in the pill.
         strips.beginSession(backgrounds: [primaryKey: "hills"], screens: [primaryInfo])
-        XCTAssertNotNil(strips.strip(for: magnifiedBar))
-        let next = try XCTUnwrap(strips.capture(of: magnifiedBar, hovered: 5, current: false))
-        _ = strips.finish(next, .strip(try strip()), moved: false)
-        XCTAssertNil(strips.capture(of: magnifiedBar, hovered: 2, current: true))
-        XCTAssertNotNil(strips.strip(for: magnifiedBar)?.pill)
+        XCTAssertNotNil(drawn(&strips, hovered: 5, at: 20).strip)
+        let next = try XCTUnwrap(capture(&strips, since: 20, at: 20.2))
+        XCTAssertEqual(strips.finish(next, .strip(try strip()), barMoved: false, at: 20.2), .kept)
+        XCTAssertNil(capture(&strips, hovered: 2, current: true, since: 21, at: 21.2))
+        XCTAssertNotNil(drawn(&strips, hovered: 2, at: 21.3).strip?.pill)
     }
 
-    func testACaptureTheBarMovedUnderIsTakenAgain() throws {
+    /// A capture caught as a caption faded measures it dim: it doesn't replace a good strip on its own.
+    func testAStripThatDisagreesWithTheOneDrawnIsHeldUntilAnotherAgrees() throws {
         var strips = strips()
-        let capture = try XCTUnwrap(strips.capture(of: magnifiedBar, hovered: 5, current: false))
-        XCTAssertEqual(strips.finish(capture, .strip(try strip()), moved: true), .moved)
-        XCTAssertNil(strips.strip(for: magnifiedBar))
-        XCTAssertNotNil(strips.capture(of: magnifiedBar, hovered: 5, current: false))
+        let good = try strip()
+        strips.adopt([magnifiedKey: good])
+        let dim = (180, 180, 190)
+        let first = try XCTUnwrap(capture(&strips))
+        XCTAssertEqual(strips.finish(first, .strip(try strip(text: dim)), barMoved: false, at: 10.2), .held)
+        XCTAssertTrue(drawn(&strips, hovered: 5, at: 10.3).strip?.image === good.image)
+        XCTAssertTrue(strips.kept[magnifiedKey]?.image === good.image)
+        let second = try XCTUnwrap(capture(&strips, since: 10.3, at: 10.5))
+        let agreeing = try strip(text: (182, 181, 191))
+        XCTAssertEqual(strips.finish(second, .strip(agreeing), barMoved: false, at: 10.5), .kept)
+        XCTAssertTrue(strips.kept[magnifiedKey]?.image === agreeing.image)
     }
 
-    func testACaptionACaptureMissedIsTriedAgainOnlyUnderAnotherThumbnail() throws {
+    func testAStripThatAgreesWithTheOneDrawnReplacesItAtOnce() throws {
         var strips = strips()
-        let capture = try XCTUnwrap(strips.capture(of: magnifiedBar, hovered: 0, current: false))
-        XCTAssertEqual(strips.finish(capture, .missed("cut off at the screen's edge"), moved: false), .missed)
-        XCTAssertNil(strips.capture(of: magnifiedBar, hovered: 0, current: false))
-        XCTAssertNotNil(strips.capture(of: magnifiedBar, hovered: 1, current: false))
-        XCTAssertTrue(strips.mayArrive(for: magnifiedBar))
+        strips.adopt([magnifiedKey: try strip()])
+        let capture = try XCTUnwrap(capture(&strips))
+        let fresh = try strip(text: (243, 244, 251))
+        XCTAssertEqual(strips.finish(capture, .strip(fresh), barMoved: false, at: 10.2), .kept)
+        XCTAssertTrue(drawn(&strips, hovered: 5, at: 10.3).strip?.image === fresh.image)
     }
 
     func testAStripCaptureFromAnEarlierSessionIsIgnored() throws {
         var strips = strips()
-        let capture = try XCTUnwrap(strips.capture(of: magnifiedBar, hovered: 5, current: false))
+        let capture = try XCTUnwrap(capture(&strips))
         strips.beginSession(backgrounds: [primaryKey: "hills"], screens: [primaryInfo])
-        XCTAssertEqual(strips.finish(capture, .strip(try strip()), moved: false), .stale)
-        XCTAssertNil(strips.strip(for: magnifiedBar))
+        XCTAssertEqual(strips.finish(capture, .strip(try strip()), barMoved: false, at: 10.2), .stale)
+        XCTAssertNil(drawn(&strips, hovered: 5, at: 10.3).strip)
     }
 
     func testStripsReadFromDiskNeverReplaceOnesCapturedThisRun() throws {
         var strips = strips()
-        let capture = try XCTUnwrap(strips.capture(of: magnifiedBar, hovered: 5, current: false))
-        _ = strips.finish(capture, .strip(try strip()), moved: false)
+        let capture = try XCTUnwrap(capture(&strips))
+        _ = strips.finish(capture, .strip(try strip()), barMoved: false, at: 10.2)
         strips.adopt([magnifiedKey: try strip(height: 30)])
-        XCTAssertEqual(strips.strip(for: magnifiedBar)?.height, 26)
+        XCTAssertEqual(drawn(&strips, hovered: 5, at: 10.3).strip?.height, 26)
+    }
+
+    /// The style is worked out once, not every frame, until the strip or the looks change.
+    func testAStripsStyleIsWorkedOutOnceUntilTheLooksChange() throws {
+        var strips = strips()
+        var asked = 0
+        func draw(at time: TimeInterval) -> StripDrawing {
+            strips.drawing(for: magnifiedBar, hovered: 5, colors: {
+                asked += 1
+                return CaptionLooks.Colors(pill: self.cgColor(self.namesRowPill))
+            }, at: time)
+        }
+        _ = draw(at: 10)
+        _ = draw(at: 10.02)
+        XCTAssertEqual(asked, 1)
+        strips.looksChanged()
+        XCTAssertNotNil(draw(at: 10.04).style.pill)
+        XCTAssertEqual(asked, 2)
+        strips.adopt([magnifiedKey: try strip(pill: true)])
+        XCTAssertEqual(draw(at: 10.06).style.pill, try strip(pill: true).pill)
+        XCTAssertEqual(asked, 3)
     }
 
     func testAStripSurvivesTheTripToDisk() throws {
@@ -1782,7 +1990,8 @@ final class MissionControlLabelsTests: XCTestCase {
         let read = try XCTUnwrap(CaptionStripStore.decode(try XCTUnwrap(CaptionStripStore.encode(kept))))
         XCTAssertEqual(read.image.width, kept.image.width)
         XCTAssertEqual(read.image.height, kept.image.height)
-        XCTAssertEqual([read.scale, read.top, read.baseline, read.text.fontSize], [2, 116, 18, 14])
+        XCTAssertEqual([read.scale, read.top, read.baseline, read.lineOffset, read.text.fontSize],
+                       [2, 116, 18, 0.5, 14])
         XCTAssertEqual(read.background, "hills")
         assertColor(try components(read.text.color), textColor)
         assertColor(try components(try XCTUnwrap(read.pill?.color)), pillColor)

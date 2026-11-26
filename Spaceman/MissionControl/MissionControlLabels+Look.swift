@@ -29,7 +29,7 @@ extension MissionControlLabels {
         // A capture from the last session may still be running: it is ignored when it lands.
         isCapturing = false
         isCapturingStrip = false
-        lastHovered = []
+        preparedStyles = [:]
         captionLooks.beginSession()
         let backgrounds = labelStyle == .nativeLook ? CaptionLooks.currentBackgrounds() : [:]
         captionStrips.beginSession(backgrounds: backgrounds, screens: ScreenInfo.current())
@@ -136,6 +136,7 @@ extension MissionControlLabels {
         }
         guard outcome != .stale else { return }
         isCapturing = false
+        if outcome == .kept || outcome == .retry { captionStrips.looksChanged() }
         guard outcome != .kept else { return }
         capturedSignature = nil
         restingSince = ProcessInfo.processInfo.systemUptime

@@ -39,9 +39,11 @@ struct NativeCaptionLook {
     let wasCurrent: Bool
     /// What was measured, for the log.
     let summary: String
-    /// The caption's text colour, and the current space's pill colour on its bar, as measured.
+    /// The caption's text colour, the current space's pill colour on its bar, and the bar's colour beside the
+    /// caption, as measured.
     var textColor: CGColor?
     var pillColor: CGColor?
+    var barColor: CGColor?
 
     func variant(current isCurrent: Bool) -> Variant? {
         isCurrent ? (current ?? plain) : (plain ?? current)
@@ -165,6 +167,9 @@ enum MissionControlCaptionLook {
     /// such as the bar's edge, and anything taller is not a caption.
     private static let minTextHeight: CGFloat = 5
     private static let maxTextHeight: CGFloat = 22
+    /// How far from its thumbnail's middle macOS may centre a caption: a strip whose caption sits further off was
+    /// captured as the thumbnails moved.
+    private static let maxLineOffset: CGFloat = 6
     /// The sizes a native caption's text is taken to be between: its name is drawn no smaller or larger.
     private static let minFontSize: CGFloat = 10
     private static let maxFontSize: CGFloat = 20
@@ -395,7 +400,9 @@ enum MissionControlCaptionLook {
             result.looks[caption.caption.key] = NativeCaptionLook(
                 plain: plain, current: current, wasCurrent: caption.pill != nil, summary: summary,
                 textColor: cgColor(caption.textColor, in: pixels.colorSpace),
-                pillColor: (caption.pill?.color ?? style?.color).flatMap { cgColor($0, in: pixels.colorSpace) })
+                pillColor: (caption.pill?.color ?? style?.color).flatMap { cgColor($0, in: pixels.colorSpace) },
+                barColor: barColor(beside: caption, pixels: pixels, scale: scale)
+                    .flatMap { cgColor($0, in: pixels.colorSpace) })
         }
         return result
     }
@@ -421,15 +428,21 @@ enum MissionControlCaptionLook {
         let top = max(found.baseline - max(px(bandAbove), pill.map { found.baseline - $0.top } ?? 0) - px(1), 0)
         let bottom = min(found.baseline + max(px(bandBelow), pill.map { $0.bottom - found.baseline } ?? 0) + px(1),
                          pixels.height)
+        let edges = eraseEdges(found, scale: scale)
+        guard bottom > top else { return .missed("no strip could be drawn") }
+        // A neighbour's caption still fading out, or the part of this one the search window cut off.
+        guard !textBeside(edges, rows: top..<bottom, found: found, pixels: pixels, scale: scale)
+        else { return .missed("text left beside the caption") }
+        let lineOffset = lineOffset(of: found, origin: origin, scale: scale)
+        guard abs(lineOffset) <= maxLineOffset
+        else { return .missed(String(format: "caption %.1fpt off its thumbnail's middle", lineOffset)) }
         let rowRect = CGRect(x: 0, y: top, width: pixels.width, height: bottom - top)
-        guard bottom > top, let row = image.cropping(to: rowRect),
+        guard let row = image.cropping(to: rowRect),
               let context = context(pixels.width, bottom - top, pixels.colorSpace),
               let data = context.data?.assumingMemoryBound(to: UInt8.self),
               let textColor = cgColor(found.textColor, in: pixels.colorSpace)
         else { return .missed("no strip could be drawn") }
         context.draw(row, in: CGRect(x: 0, y: 0, width: pixels.width, height: bottom - top))
-        let edges = (left: pill.map { $0.left - 2 } ?? found.inkLeft - px(platePadding),
-                     right: pill.map { $0.right + 2 } ?? found.inkRight + 1 + px(platePadding))
         let columns = max(edges.left, 0)..<min(max(edges.right, edges.left), pixels.width)
         let canvas = Canvas(data: data, width: pixels.width, left: 0, top: top, columns: columns, rows: top..<bottom)
         guard paintBar(canvas, edges: edges, found: found, pixels: pixels, scale: scale),
@@ -438,16 +451,84 @@ enum MissionControlCaptionLook {
         let measuredPill = pill.flatMap { pill in
             cgColor(pill.color, in: pixels.colorSpace).map {
                 CaptionStrip.PillStyle(
-                    padding: CGFloat(found.inkLeft - pill.left) / scale,
+                    padding: CGFloat(max(found.inkLeft - pill.left, pill.right - 1 - found.inkRight)) / scale,
                     above: CGFloat(found.baseline - pill.top) / scale,
                     below: CGFloat(pill.bottom - found.baseline) / scale, color: $0)
             }
         }
         return .strip(CaptionStrip(
             image: strip, scale: scale, top: origin.y + CGFloat(top) / scale - hovered.barTop,
-            baseline: CGFloat(found.baseline - top) / scale,
+            baseline: CGFloat(found.baseline - top) / scale, lineOffset: lineOffset,
             text: CaptionStrip.TextStyle(fontSize: found.fontSize, color: textColor), pill: measuredPill,
             background: background))
+    }
+
+    /// The columns a caption's plate covers, in pixels of its capture, with the right edge exclusive: its pill and a
+    /// little more, or its text and `platePadding` either side.
+    private static func eraseEdges(_ found: Measured, scale: CGFloat) -> (left: Int, right: Int) {
+        let padding = Int((platePadding * scale).rounded())
+        return (left: found.pill.map { $0.left - 2 } ?? found.inkLeft - padding,
+                right: found.pill.map { $0.right + 2 } ?? found.inkRight + 1 + padding)
+    }
+
+    /// The bar's colour either side of `found`'s plate, halfway up its text.
+    private static func barColor(beside found: Measured, pixels: Pixels, scale: CGFloat) -> SIMD3<Double>? {
+        let edges = eraseEdges(found, scale: scale)
+        let band = max(Int((edgeBand * scale).rounded()), 1)
+        let row = min(max(found.baseline - Int((5 * scale).rounded()), 0), pixels.height - 1)
+        let colors = [(edges.left - band)..<edges.left, edges.right..<(edges.right + band)].compactMap {
+            edgeColor(pixels, columns: $0, row: row, isText: found.isText)
+        }
+        return colors.isEmpty ? nil : mean(colors)
+    }
+
+    /// Whether `rows` of the capture hold text outside the plate between `edges`, looked for in windows as wide as
+    /// `found`'s text, so that text is told from the bar's broad shading as in `measure`.
+    private static func textBeside(
+        _ edges: (left: Int, right: Int), rows: Range<Int>, found: Measured, pixels: Pixels, scale: CGFloat
+    ) -> Bool {
+        let window = max(found.inkWidth, 8), gap = Int((clusterGap * scale).rounded())
+        let shortest = shortestText(covering: found.caption.covers) * scale
+        let tallest = maxTextHeight * scale
+        let sides = [0..<min(max(edges.left, 0), pixels.width), min(max(edges.right, 0), pixels.width)..<pixels.width]
+        return sides.contains { side in
+            stride(from: side.lowerBound, to: side.upperBound, by: window / 2).contains { start in
+                let columns = start..<min(start + window, side.upperBound)
+                return textClusters(rows: rows, columns: columns, isText: found.isText, gap: gap).contains {
+                    let height = CGFloat($0.count)
+                    return height >= shortest && height < tallest
+                }
+            }
+        }
+    }
+
+    /// How far right of its thumbnail's middle macOS centred `found`'s line of text, in points: where its ink sits,
+    /// less how far its ink's middle lies from the middle of its advance, which differs from caption to caption.
+    private static func lineOffset(of found: Measured, origin: CGPoint, scale: CGFloat) -> CGFloat {
+        origin.x + CGFloat(found.inkCentre) / scale - found.caption.centre.x
+            - inkOffset(of: found.caption.covers, size: found.fontSize)
+    }
+
+    /// The rows of `rows` holding text in `columns`, grouped into lines across gaps of up to `gap` rows, lowest first.
+    private static func textClusters(
+        rows: Range<Int>, columns: Range<Int>, isText: (Int, Int) -> Bool, gap: Int
+    ) -> [ClosedRange<Int>] {
+        var clusters: [ClosedRange<Int>] = []
+        for y in rows.reversed() where columns.contains(where: { isText($0, y) }) {
+            if let last = clusters.last, last.lowerBound - y <= gap {
+                clusters[clusters.count - 1] = y...last.upperBound
+            } else {
+                clusters.append(y...y)
+            }
+        }
+        return clusters
+    }
+
+    /// The least height, in points, of text taken for a caption reading `covers`: its own text's at the smallest size
+    /// a caption is taken to be. The slack allows for antialiased rows lost at half contrast, and descenders a
+    /// truncated caption drops.
+    private static func shortestText(covering covers: String) -> CGFloat {
+        max(minTextHeight, plausibleShare * inkBounds(of: covers, size: minFontSize).height)
     }
 
     // swiftlint:disable:next function_body_length cyclomatic_complexity
@@ -488,18 +569,10 @@ enum MissionControlCaptionLook {
         // The caption is the lowest line of text in the window: anything above it, such as the
         // bottom of a thumbnail, is separated from it by rows of plain bar. Lines too thin to be
         // text, such as the bar's lit bottom edge, are passed over.
-        var clusters: [ClosedRange<Int>] = []
-        for y in rows.reversed() where columns.contains(where: { isText($0, y) }) {
-            if let last = clusters.last, last.lowerBound - y <= px(clusterGap) {
-                clusters[clusters.count - 1] = y...last.upperBound
-            } else {
-                clusters.append(y...y)
-            }
-        }
-        // Nor is text much shorter than the caption's own text at the smallest size a caption is taken to be:
-        // a capture as the thumbnails resize can find a sliver of one where the caption should be. The slack
-        // allows for antialiased rows lost at half contrast, and descenders a truncated caption drops.
-        let shortest = max(minTextHeight, plausibleShare * inkBounds(of: caption.covers, size: minFontSize).height)
+        let clusters = textClusters(rows: rows, columns: columns, isText: isText, gap: px(clusterGap))
+        // Nor is text much shorter than the caption's own text could be: a capture as the thumbnails resize can
+        // find a sliver of one where the caption should be.
+        let shortest = shortestText(covering: caption.covers)
         guard let cluster = clusters.first(where: { CGFloat($0.upperBound - $0.lowerBound + 1) >= shortest * scale })
         else { return .missed(String(format: "no text %.1fpt tall", shortest)) }
         guard cluster.upperBound - cluster.lowerBound < px(maxTextHeight) else {
@@ -773,6 +846,13 @@ enum MissionControlCaptionLook {
 
     static func inkBounds(of text: String, size: CGFloat) -> CGRect {
         CTLineGetBoundsWithOptions(textLine(text, size: size, color: nil), .useGlyphPathBounds)
+    }
+
+    /// How far right of the middle of `text`'s advance its ink's middle lies, in points, in the system font.
+    static func inkOffset(of text: String, size: CGFloat) -> CGFloat {
+        let line = textLine(text, size: size, color: nil)
+        return CTLineGetBoundsWithOptions(line, .useGlyphPathBounds).midX
+            - CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) / 2
     }
 
     // MARK: - Colour
