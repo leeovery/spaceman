@@ -24,6 +24,8 @@ struct BarLayout {
     /// The bar's list of thumbnails, which knows the selected one, and each thumbnail's title and frame.
     var list: AXUIElement?
     var buttons: [(element: AXUIElement, title: String, frame: CGRect)] = []
+    /// Each thumbnail's space, in the thumbnails' order, labelled or not; empty when they didn't match.
+    var spaceIDs: [String] = []
     /// The last thumbnail and where it was, to tell the thumbnails sliding together from other changes.
     var lastButton: AXUIElement?
     var lastButtonX: CGFloat?
@@ -36,9 +38,10 @@ struct BarLayout {
         moved.firstButtonX = firstButtonX.map { $0 + dx }
         moved.lastButtonX = lastButtonX.map { $0 + dx }
         moved.buttons = buttons.map { ($0.element, $0.title, $0.frame.offsetBy(dx: dx, dy: 0)) }
-        moved.captions = captions.map {
-            Caption(centre: CGPoint(x: $0.centre.x + dx, y: $0.centre.y), maxWidth: $0.maxWidth, covers: $0.covers,
-                    name: $0.name, colorHex: $0.colorHex, spaceID: $0.spaceID)
+        moved.captions = captions.map { caption in
+            var moved = caption
+            moved.centre.x += dx
+            return moved
         }
         return moved
     }
@@ -59,21 +62,34 @@ struct BarLayout {
             firstButtonX: nil,
             screen: screen,
             displayID: displayID,
-            captions: captions.map {
-                Caption(
-                    centre: CGPoint(x: $0.centre.x, y: $0.centre.y + shift),
-                    maxWidth: $0.maxWidth, covers: $0.covers, name: $0.name, colorHex: $0.colorHex,
-                    spaceID: $0.spaceID)
+            captions: captions.map { caption in
+                var moved = caption
+                moved.centre.y += shift
+                return moved
             },
             buttons: buttons.map { ($0.element, $0.title, $0.frame.offsetBy(dx: 0, dy: shift)) },
+            spaceIDs: spaceIDs,
             addButton: addButton?.offsetBy(dx: 0, dy: shift))
+    }
+
+    /// This layout with its captions matched afresh from its thumbnails, with the names stored now and
+    /// unnamed spaces labelled or not, as a session's style has it.
+    func rematched(labelsUnnamed: Bool, storedNames: [String: SpaceNameInfo]) -> BarLayout {
+        var layout = self
+        layout.captions = MissionControlLabels.dockCaptions(
+            buttons.map { ($0.element, $0.frame, $0.title) }, spaceIDs: spaceIDs, labelsUnnamed: labelsUnnamed,
+            storedNames: storedNames
+        ).captions
+        return layout
     }
 }
 
 /// One name label's place over a "Desktop N" caption, in AX coordinates, and its space.
 struct Caption {
-    let centre: CGPoint
-    let maxWidth: CGFloat
+    var centre: CGPoint
+    var maxWidth: CGFloat
+    /// Its thumbnail's place among the bar's: titles can repeat, as for two full-screen windows of one app.
+    var index: Int
     let covers: String
     let name: String
     let colorHex: String?
@@ -132,4 +148,11 @@ struct Reflow {
     let count: Int
     /// Where the labels go until the Dock reports the thumbnails.
     var predicted: BarLayout?
+
+    /// Where `caption`'s label moves from, or nil if it had no label before, as a desktop just added.
+    func move(of caption: Caption) -> TimedMove? {
+        from[caption.spaceID].map {
+            TimedMove(timing: timing, reference: reference, from: CGVector(dx: $0.x - caption.centre.x, dy: 0))
+        }
+    }
 }

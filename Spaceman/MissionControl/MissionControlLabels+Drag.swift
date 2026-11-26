@@ -97,7 +97,7 @@ extension MissionControlLabels {
             return
         }
         running.reported = true
-        if bar.captions.map(\.spaceID) == running.order, running.gap != running.origin {
+        if running.keepsOrder(of: bar), running.gap != running.origin {
             record("drop put back at \(running.origin + 1), not \(running.gap + 1)", at: answered)
             moveGap(of: &running, to: running.origin, in: bar, at: ProcessInfo.processInfo.systemUptime)
         }
@@ -288,9 +288,9 @@ extension MissionControlLabels {
 /// A thumbnail dragged along its bar, and the others moving aside to make room for it.
 struct ThumbnailDrag {
     let screen: CGRect
-    /// The dragged thumbnail's space, if it has a label.
+    /// The dragged thumbnail's space, labelled or not; nil when the bar's spaces are unknown.
     let spaceID: String?
-    /// The labelled spaces in their thumbnails' order when it was picked up, and each one's place.
+    /// Every space in its thumbnails' order when it was picked up, labelled or not, and each one's place.
     let order: [String]
     let places: [String: Int]
     /// Where it was picked up from, and where it would go if let go now.
@@ -316,14 +316,9 @@ struct ThumbnailDrag {
     init(bar: BarLayout, origin: Int, grabOffset: CGFloat, at time: TimeInterval) {
         screen = bar.screen
         startedAt = time
-        let titles = bar.buttons.map(\.title)
-        var places: [String: Int] = [:]
-        for caption in bar.captions {
-            if let index = titles.firstIndex(of: caption.covers) { places[caption.spaceID] = index }
-        }
-        self.places = places
-        order = bar.captions.map(\.spaceID)
-        spaceID = bar.captions.first { $0.covers == titles[origin] }?.spaceID
+        order = bar.spaceIDs
+        places = Dictionary(bar.spaceIDs.enumerated().map { ($1, $0) }) { first, _ in first }
+        spaceID = bar.spaceIDs.indices.contains(origin) ? bar.spaceIDs[origin] : nil
         self.origin = origin
         gap = origin
         self.grabOffset = grabOffset
@@ -344,8 +339,14 @@ struct ThumbnailDrag {
     /// shows the thumbnails in the order they were picked up in. Once the Dock reports them reordered,
     /// they are where it reports them.
     func place(of spaceID: String, in bar: BarLayout) -> Int? {
-        guard bar.captions.map(\.spaceID) == order, let place = places[spaceID] else { return nil }
+        guard keepsOrder(of: bar), let place = places[spaceID] else { return nil }
         if spaceID == self.spaceID { return gap }
         return MissionControlLabels.place(of: place, origin: origin, gap: gap)
+    }
+
+    /// Whether `bar` shows every thumbnail in the order they were picked up in. Judged by every space,
+    /// labelled or not: an unlabelled thumbnail dragged elsewhere leaves the labelled ones in order.
+    func keepsOrder(of bar: BarLayout) -> Bool {
+        !order.isEmpty && bar.spaceIDs == order
     }
 }

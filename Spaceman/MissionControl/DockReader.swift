@@ -28,8 +28,8 @@ final class DockReader {
         /// The first bar's frame now, or nil when the Dock has no bar.
         var barFrame: CGRect?
         var mismatch: String?
-        /// Each bar's selected thumbnail's title: the Dock's current space, which has its pill.
-        var selected: [String?] = []
+        /// Each bar's selected thumbnail's place: the Dock's current space, which has its pill.
+        var selected: [Int?] = []
     }
 
     private let queue = DispatchQueue(label: "\(Constants.AppInfo.bundleId).dockReader", qos: .userInteractive)
@@ -173,10 +173,10 @@ final class DockReader {
 
     /// Each bar's selected thumbnail, as the Dock has it: it moves the pill the moment it changes,
     /// before macOS announces the new space.
-    private func selected() -> [String?] {
+    private func selected() -> [Int?] {
         layouts.map { layout in
             guard let list = layout.list, let chosen = AX.selectedChild(of: list) else { return nil }
-            return layout.buttons.first { CFEqual($0.element, chosen) }?.title
+            return layout.buttons.firstIndex { CFEqual($0.element, chosen) }
         }
     }
 
@@ -219,6 +219,7 @@ final class DockReader {
                 captions: result.captions,
                 list: list?.element,
                 buttons: found.map { ($0.element, $0.title, $0.frame) },
+                spaceIDs: result.spaceIDs,
                 lastButton: found.last?.element,
                 lastButtonX: found.last?.frame.minX,
                 addButton: AX.children(of: bar).first { AX.identifier(of: $0) == "mc.spaces.add" }

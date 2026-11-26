@@ -21,6 +21,10 @@ enum MissionControlLabelStyle: String, CaseIterable {
     /// Whether the labels are shown at all.
     static let namesShownKey = "showMissionControlLabels"
 
+    /// Whether spaces never named get a label too: in the spaces' colours every space has one, while the
+    /// native look leaves an unnamed space its native caption, which already looks right.
+    var labelsUnnamed: Bool { self == .spaceColors }
+
     /// The style picked in Preferences.
     static func chosen(in defaults: UserDefaults = .standard) -> MissionControlLabelStyle {
         defaults.string(forKey: defaultsKey).flatMap(Self.init(rawValue:)) ?? .nativeLook

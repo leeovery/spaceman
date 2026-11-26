@@ -395,16 +395,30 @@ final class MissionControlLabels {
         isTracking = true
         trackingStarted = ProcessInfo.processInfo.systemUptime
         beginLookSession()
+        rematchKeptLayouts()
         sawBar = false
         latestReadingTime = 0
         previousReadingTime = 0
         currentSpaceIDs = Self.currentSpaceIDs()
         lastMismatch = nil
         layoutsVersion = 0
-        reader.begin(dockPID: pid, screens: ScreenInfo.current(), labelsUnnamed: labelStyle == .spaceColors)
+        reader.begin(dockPID: pid, screens: ScreenInfo.current(), labelsUnnamed: labelStyle.labelsUnnamed)
         pointer = (trackingStarted, Self.axPoint(NSEvent.mouseLocation))
         clock.start()
         tick()
+    }
+
+    /// Matches the layouts kept from earlier sessions afresh, in this session's style and with the names
+    /// stored now: an opening slide replays them before the Dock answers, and the style may have changed.
+    private func rematchKeptLayouts() {
+        let labelsUnnamed = labelStyle.labelsUnnamed
+        let storedNames = SpaceNameStore.shared.loadAll()
+        let rematch = { (layout: BarLayout) in
+            layout.rematched(labelsUnnamed: labelsUnnamed, storedNames: storedNames)
+        }
+        restingLayouts = restingLayouts.map(rematch)
+        expandedLayouts = expandedLayouts.mapValues(rematch)
+        expandedLayoutsByCount = expandedLayoutsByCount.mapValues(rematch)
     }
 
     static func axPoint(_ point: NSPoint) -> CGPoint {
@@ -452,19 +466,19 @@ final class MissionControlLabels {
         }) {
             to = reported.atRest()
         } else {
-            guard let layout = expandedLayouts[bar.displayID],
-                  layout.captions.map(\.covers) == bar.captions.map(\.covers)
+            guard let layout = expandedLayouts[bar.displayID], layout.buttons.count == bar.buttons.count,
+                  layout.captions.map(\.index) == bar.captions.map(\.index)
             else { return }
-            let hovered = bar.buttons.first { $0.frame.minX <= point.x && point.x <= $0.frame.maxX }
-            let dx = hovered.flatMap { button in layout.buttons.first { $0.title == button.title } }
-                .map { point.x - $0.frame.midX } ?? 0
+            let hovered = bar.buttons.firstIndex { $0.frame.minX <= point.x && point.x <= $0.frame.maxX }
+            let dx = hovered.map { point.x - layout.buttons[$0].frame.midX } ?? 0
             to = layout.offsetBy(dx: dx)
         }
         // The names as they are now, at the thumbnails' places.
         to.captions = to.captions.map { caption in
-            guard let now = bar.captions.first(where: { $0.covers == caption.covers }) else { return caption }
-            return Caption(centre: caption.centre, maxWidth: caption.maxWidth, covers: caption.covers,
-                           name: now.name, colorHex: now.colorHex, spaceID: now.spaceID)
+            guard var now = bar.captions.first(where: { $0.index == caption.index }) else { return caption }
+            now.centre = caption.centre
+            now.maxWidth = caption.maxWidth
+            return now
         }
         grow = (bar.screen, pending.time, bar, to)
         record("grow", at: pending.time + DockMotion.expand.delay)

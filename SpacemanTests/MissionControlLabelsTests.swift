@@ -355,8 +355,8 @@ final class MissionControlLabelsTests: XCTestCase {
 
     private func caption(_ number: Int, _ name: String) -> Caption {
         Caption(
-            centre: CGPoint(x: CGFloat(number) * 200, y: 30), maxWidth: 180, covers: "Desktop \(number)", name: name,
-            colorHex: nil, spaceID: "\(number)")
+            centre: CGPoint(x: CGFloat(number) * 200, y: 30), maxWidth: 180, index: number - 1,
+            covers: "Desktop \(number)", name: name, colorHex: nil, spaceID: "\(number)")
     }
 
     /// A bar on `screen`, `retraction` of its height above its place at rest.
@@ -367,9 +367,10 @@ final class MissionControlLabelsTests: XCTestCase {
             bar: nil, firstButton: nil,
             frame: CGRect(x: screen.minX, y: screen.minY - lift, width: screen.width, height: height),
             firstButtonX: nil, screen: screen, displayID: 1,
-            captions: captions.map {
-                Caption(centre: CGPoint(x: $0.centre.x, y: $0.centre.y - lift), maxWidth: $0.maxWidth,
-                        covers: $0.covers, name: $0.name, colorHex: nil, spaceID: $0.spaceID)
+            captions: captions.map { caption in
+                var lifted = caption
+                lifted.centre.y -= lift
+                return lifted
             })
     }
 
@@ -804,20 +805,30 @@ final class MissionControlLabelsTests: XCTestCase {
 
     // MARK: - Which spaces get a label
 
-    /// Three thumbnails: one named in red, one with only a colour, one with no stored entry.
-    private func matchedCaptions(labelsUnnamed: Bool) -> [Caption] {
+    func testOnlySpaceColorsLabelsUnnamedSpaces() {
+        XCTAssertTrue(MissionControlLabelStyle.spaceColors.labelsUnnamed)
+        XCTAssertFalse(MissionControlLabelStyle.nativeLook.labelsUnnamed)
+    }
+
+    /// Mail, named in red; a space with only a colour; and one with no stored entry.
+    private let storedNames = [
+        "11": SpaceNameInfo(spaceNum: 1, spaceName: "Mail", spaceLabel: "1", colorHex: "FF0000"),
+        "12": SpaceNameInfo(spaceNum: 2, spaceName: SpaceObserver.unnamedSpaceName, spaceLabel: "2",
+                            colorHex: "00FF00"),
+    ]
+
+    private func thumbnails(_ titles: [String]) -> [AX.Button] {
         let element = AXUIElementCreateApplication(getpid())
-        let found: [AX.Button] = (1...3).map { number in
-            (element, CGRect(x: CGFloat(number) * 100, y: 0, width: 80, height: 24), "Desktop \(number)")
+        return titles.indices.map { index in
+            (element, CGRect(x: CGFloat(index + 1) * 100, y: 0, width: 80, height: 24), titles[index])
         }
-        let storedNames = [
-            "11": SpaceNameInfo(spaceNum: 1, spaceName: "Mail", spaceLabel: "1", colorHex: "FF0000"),
-            "12": SpaceNameInfo(spaceNum: 2, spaceName: SpaceObserver.unnamedSpaceName, spaceLabel: "2",
-                                colorHex: "00FF00"),
-        ]
-        return MissionControlLabels.match(
-            found, centres: found.map { CGPoint(x: $0.frame.midX, y: 40) }, fallbackWidth: 80,
-            spaceIDs: ["11", "12", "13"], labelsUnnamed: labelsUnnamed, storedNames: storedNames
+    }
+
+    private func matchedCaptions(
+        labelsUnnamed: Bool, titles: [String] = ["Desktop 1", "Desktop 2", "Desktop 3"]
+    ) -> [Caption] {
+        MissionControlLabels.dockCaptions(
+            thumbnails(titles), spaceIDs: ["11", "12", "13"], labelsUnnamed: labelsUnnamed, storedNames: storedNames
         ).captions
     }
 
@@ -834,13 +845,17 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertNil(caption.colorHex)
     }
 
-    func testAnEmptyNameCountsAsUnnamed() throws {
-        let element = AXUIElementCreateApplication(getpid())
-        let found: [AX.Button] = [(element, CGRect(x: 0, y: 0, width: 80, height: 24), "Desktop 1")]
+    func testAnUnnamedSpaceWithNoCaptionTitleGetsNoLabel() {
+        let captions = matchedCaptions(labelsUnnamed: true, titles: ["Desktop 1", "", "Desktop 3"])
+        XCTAssertEqual(captions.map(\.spaceID), ["11", "13"])
+    }
+
+    func testAnEmptyNameCountsAsUnnamed() {
         let named = ["1": SpaceNameInfo(spaceNum: 1, spaceName: "", spaceLabel: "1")]
         let match = { (labelsUnnamed: Bool) in
-            MissionControlLabels.match(found, centres: [CGPoint(x: 40, y: 40)], fallbackWidth: 80, spaceIDs: ["1"],
-                                       labelsUnnamed: labelsUnnamed, storedNames: named).captions
+            MissionControlLabels.dockCaptions(
+                self.thumbnails(["Desktop 1"]), spaceIDs: ["1"], labelsUnnamed: labelsUnnamed, storedNames: named
+            ).captions
         }
         XCTAssertEqual(match(true).map(\.name), ["Desktop 1"])
         XCTAssertTrue(match(false).isEmpty)
@@ -857,6 +872,62 @@ final class MissionControlLabelsTests: XCTestCase {
             XCTAssertEqual(caption.covers, "Desktop 1")
             XCTAssertEqual(caption.colorHex, "FF0000")
         }
+    }
+
+    /// Two full-screen windows of one app share a title: each caption knows its own thumbnail.
+    func testCaptionsKnowTheirThumbnailsWhenTitlesRepeat() {
+        let captions = matchedCaptions(labelsUnnamed: true, titles: ["Safari", "Safari", "Desktop 3"])
+        XCTAssertEqual(captions.map(\.index), [0, 1, 2])
+        XCTAssertEqual(captions.map(\.spaceID), ["11", "12", "13"])
+    }
+
+    /// A Dock bar of `titles` showing `spaceIDs`, its captions matched in the native look.
+    private func dockBar(_ titles: [String], spaceIDs: [String]) -> BarLayout {
+        let found = thumbnails(titles)
+        return BarLayout(
+            bar: nil, firstButton: nil, frame: CGRect(x: 0, y: 0, width: 2560, height: 40), firstButtonX: nil,
+            screen: primary, displayID: 1,
+            captions: MissionControlLabels.dockCaptions(
+                found, spaceIDs: spaceIDs, labelsUnnamed: false, storedNames: storedNames).captions,
+            buttons: found.map { ($0.element, $0.title, $0.frame) }, spaceIDs: spaceIDs)
+    }
+
+    func testAKeptLayoutIsRematchedInTheNewSessionsStyle() {
+        let native = dockBar(["Desktop 1", "Desktop 2", "Desktop 3"], spaceIDs: ["11", "12", "13"])
+        XCTAssertEqual(native.captions.map(\.spaceID), ["11"])
+        let colours = native.rematched(labelsUnnamed: true, storedNames: storedNames)
+        XCTAssertEqual(colours.captions.map(\.name), ["Mail", "Desktop 2", "Desktop 3"])
+        XCTAssertEqual(colours.captions.map(\.centre), matchedCaptions(labelsUnnamed: true).map(\.centre))
+        XCTAssertEqual(colours.rematched(labelsUnnamed: false, storedNames: storedNames).captions.map(\.spaceID),
+                       ["11"])
+    }
+
+    func testADraggedThumbnailIsKnownByItsPlaceNotItsTitle() {
+        let bar = dockBar(["Safari", "Safari", "Desktop 3"], spaceIDs: ["11", "12", "13"])
+        let drag = ThumbnailDrag(bar: bar, origin: 1, grabOffset: 0, at: 0)
+        XCTAssertEqual(drag.spaceID, "12")
+        XCTAssertEqual(drag.places, ["11": 0, "12": 1, "13": 2])
+    }
+
+    /// Dragging the unnamed first thumbnail to the end leaves the named ones in their order, but the
+    /// thumbnails are reordered: the labels follow the Dock, not the places reckoned for the drag.
+    func testADropReordersByEveryThumbnailNotOnlyTheLabelledOnes() {
+        let titles = ["Desktop 1", "Desktop 2", "Desktop 3"]
+        let picked = dockBar(titles, spaceIDs: ["13", "11", "12"])
+        let drag = ThumbnailDrag(bar: picked, origin: 0, grabOffset: 0, at: 0)
+        let dropped = dockBar(titles, spaceIDs: ["11", "12", "13"])
+        XCTAssertEqual(dropped.captions.map(\.spaceID), picked.captions.map(\.spaceID))
+        XCTAssertTrue(drag.keepsOrder(of: picked))
+        XCTAssertFalse(drag.keepsOrder(of: dropped))
+        XCTAssertNil(drag.place(of: "11", in: dropped))
+    }
+
+    func testADesktopAddedHasNoLabelUntilTheOthersAreInPlace() throws {
+        let reflow = Reflow(screen: primary, timing: DockMotion.add, reference: 5,
+                            from: ["1": CGPoint(x: 300, y: 30)], count: 2)
+        XCTAssertNil(reflow.move(of: caption(2, "Code")))
+        let move = try XCTUnwrap(reflow.move(of: caption(1, "Mail")))
+        XCTAssertEqual(move, TimedMove(timing: DockMotion.add, reference: 5, from: CGVector(dx: 100, dy: 0)))
     }
 
     // MARK: - Motion recording

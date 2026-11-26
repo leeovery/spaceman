@@ -14,12 +14,12 @@ extension MissionControlLabels {
     /// through it. `selected` gives each bar's current space, as the Dock has it; without it, macOS's
     /// current spaces, which it announces only after switching.
     func draw(
-        _ bars: [BarLayout], retraction: CGFloat, selected: [String?], slide: TimedSlide?, at frameTime: TimeInterval
+        _ bars: [BarLayout], retraction: CGFloat, selected: [Int?], slide: TimedSlide?, at frameTime: TimeInterval
     ) {
         let matching = labelStyle == .nativeLook
         var labels: [MissionControlLabel] = []
         for (index, measured) in bars.enumerated() {
-            let selectedTitle = index < selected.count ? selected[index] : nil
+            let selectedIndex = index < selected.count ? selected[index] : nil
             // A bar growing into thumbnails is drawn at the thumbnails' places, each label moving there
             // from its name; one about to grow stays as it was until it starts.
             let growing = grow.flatMap { $0.screen == measured.screen ? $0 : nil }
@@ -58,23 +58,22 @@ extension MissionControlLabels {
                         dragged = drag.moves[caption.spaceID]?.earlier(by: drag.watched ? 0 : clock.frameDuration / 2)
                     }
                 }
-                let reflowing = reflow.flatMap { running in
-                    running.screen == bar.screen ? running.from[caption.spaceID].map {
-                        TimedMove(
-                            timing: running.timing, reference: running.reference,
-                            from: CGVector(dx: $0.x - caption.centre.x, dy: 0))
-                        .earlier(by: clock.frameDuration / 2)
-                    } : nil
+                var reflowing: TimedMove?
+                if let running = reflow, running.screen == bar.screen {
+                    // A label with nowhere to move from, as a desktop's just added, shows once the others are
+                    // in place: shown at once, it would sit still while they move.
+                    guard let move = running.move(of: caption) else { continue }
+                    reflowing = move.earlier(by: clock.frameDuration / 2)
                 }
                 let moving = dragged ?? reflowing ?? growing.flatMap { running in
-                    running.from.captions.first { $0.covers == caption.covers }.map {
+                    running.from.captions.first { $0.index == caption.index }.map {
                         TimedMove(
                             timing: DockMotion.expand, reference: running.reference,
                             from: CGVector(dx: $0.centre.x - caption.centre.x, dy: $0.centre.y - caption.centre.y))
                         .earlier(by: clock.frameDuration / 2)
                     }
                 }
-                let variant = found?.look.variant(current: selectedTitle.map { $0 == caption.covers }
+                let variant = found?.look.variant(current: selectedIndex.map { $0 == caption.index }
                     ?? currentSpaceIDs.contains(caption.spaceID))
                 var label = Self.label(for: caption, centre: centre, screen: bar.screen, look: variant)
                 label.barHeight = bar.frame.height

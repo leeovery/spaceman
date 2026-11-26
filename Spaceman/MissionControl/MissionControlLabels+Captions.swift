@@ -70,10 +70,22 @@ extension MissionControlLabels {
         return spaces?.count == 1
     }
 
-    /// The captions of one Dock Spaces Bar on `screen`; a caption can sit above its screen while
-    /// the bar slides in or out. Safe off the main thread.
+    /// The captions of one Dock Spaces Bar on `screen`, and every thumbnail's space when they match; a
+    /// caption can sit above its screen while the bar slides in or out. Safe off the main thread.
     static func dockCaptions(_ found: [AX.Button], screen: ScreenInfo, labelsUnnamed: Bool)
-        -> (captions: [Caption], mismatch: String?) {
+        -> (captions: [Caption], spaceIDs: [String], mismatch: String?) {
+        let spaceIDs = orderedSpaceIDs(displayUUID: screen.uuid)
+        let result = dockCaptions(found, spaceIDs: spaceIDs, labelsUnnamed: labelsUnnamed)
+        return (result.captions, spaceIDs.count == found.count ? spaceIDs : [], result.mismatch)
+    }
+
+    /// The captions of Dock thumbnails `found` showing the spaces `spaceIDs`.
+    static func dockCaptions(
+        _ found: [AX.Button],
+        spaceIDs: [String],
+        labelsUnnamed: Bool,
+        storedNames: [String: SpaceNameInfo] = SpaceNameStore.shared.loadAll()
+    ) -> (captions: [Caption], mismatch: String?) {
         let centres = found.map {
             // Dock: AX frame is top-left origin
             // Caption "Desktop N" sits below the frame
@@ -83,8 +95,8 @@ extension MissionControlLabels {
             let captionY = $0.frame.maxY + gapToCaption + MissionControlLabelOverlay.labelHeight / 2
             return CGPoint(x: $0.frame.midX, y: captionY)
         }
-        return match(found, centres: centres, fallbackWidth: found.first?.frame.width ?? 0,
-                     spaceIDs: orderedSpaceIDs(displayUUID: screen.uuid), labelsUnnamed: labelsUnnamed)
+        return match(found, centres: centres, fallbackWidth: found.first?.frame.width ?? 0, spaceIDs: spaceIDs,
+                     labelsUnnamed: labelsUnnamed, storedNames: storedNames)
     }
 
     /// Matches thumbnails to spaces and their stored names and colours. A space never named gets a label
@@ -106,7 +118,9 @@ extension MissionControlLabels {
         let captions = centres.indices.compactMap { index -> Caption? in
             let spaceID = spaceIDs[index]
             let nameInfo = storedNames[spaceID]
-            guard let name = givenName(nameInfo) ?? (labelsUnnamed ? found[index].title : nil) else { return nil }
+            let title = found[index].title
+            guard let name = givenName(nameInfo) ?? (labelsUnnamed && !title.isEmpty ? title : nil)
+            else { return nil }
             let neighbours = [index - 1, index + 1]
                 .filter(centres.indices.contains)
                 .map { abs(centres[$0].x - centres[index].x) }
@@ -114,7 +128,8 @@ extension MissionControlLabels {
             return Caption(
                 centre: centres[index],
                 maxWidth: width,
-                covers: found[index].title,
+                index: index,
+                covers: title,
                 name: name,
                 colorHex: nameInfo?.colorHex,
                 spaceID: spaceID)

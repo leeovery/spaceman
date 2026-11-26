@@ -44,12 +44,13 @@ extension MissionControlLabels {
             return
         }
         guard let bar = restingLayouts.first(where: { bar in bar.buttons.contains { $0.frame.contains(point) } }),
-              let button = bar.buttons.first(where: { $0.frame.contains(point) })
+              let place = bar.buttons.firstIndex(where: { $0.frame.contains(point) })
         else { return }
+        let button = bar.buttons[place]
         let reading = reader.latest(waitingUpTo: 0)
         let current = reading.layouts.indices.contains { index in
             reading.layouts[index].screen == bar.screen && index < reading.selected.count
-                && reading.selected[index] == button.title
+                && reading.selected[index] == place
         }
         noteMotion()
         if current {
@@ -126,15 +127,18 @@ extension MissionControlLabels {
         } ?? []
         guard centres.count == count else { return }
         var predicted = before
+        // Which space each thumbnail shows is known only once the Dock reports them.
+        predicted.spaceIDs = []
         predicted.captions = before.captions.compactMap { caption in
-            guard let index = before.buttons.firstIndex(where: { $0.frame.minX <= caption.centre.x
-                && caption.centre.x <= $0.frame.maxX }), index != removed
-            else { return nil }
+            let index = caption.index
+            guard index != removed else { return nil }
             let place = removed.map { index > $0 ? index - 1 : index } ?? index
             let spacing = count > 1 ? abs(centres[1] - centres[0]) : caption.maxWidth + Self.labelGap
-            return Caption(
-                centre: CGPoint(x: centres[place], y: caption.centre.y), maxWidth: spacing - Self.labelGap,
-                covers: caption.covers, name: caption.name, colorHex: caption.colorHex, spaceID: caption.spaceID)
+            var moved = caption
+            moved.centre.x = centres[place]
+            moved.maxWidth = spacing - Self.labelGap
+            moved.index = place
+            return moved
         }
         let timing: DockMotion.Timing
         if case .add = change { timing = DockMotion.add } else { timing = DockMotion.remove }

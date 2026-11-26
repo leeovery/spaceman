@@ -55,7 +55,7 @@ extension MissionControlLabels {
         }
         let bar = bars.first { $0.screen == drag.screen }
         let caption = bar?.captions.first { $0.spaceID == drag.spaceID }
-        let drawn = caption.map { caption in labels.contains { $0.name == caption.name && $0.screen == drag.screen } }
+        let drawn = caption.map { caption in labels.contains { $0.key == caption.spaceID && $0.screen == drag.screen } }
         let line = "drag of space \(drag.spaceID ?? "none"): bar \(bar == nil ? "missing" : "found"), caption "
             + "\(caption.map { "\($0.covers) at \(Int($0.centre.x.rounded()))" } ?? "missing"), label "
             + "\(drawn.map { $0 ? "drawn" : "hidden" } ?? "-"), gap \(drag.gap), dropped \(drag.dropped)"
