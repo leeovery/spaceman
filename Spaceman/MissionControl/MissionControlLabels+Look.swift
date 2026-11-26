@@ -20,7 +20,7 @@ extension MissionControlLabels {
 
     /// Readies the native look for a session: the style is decided afresh, captures start afresh, and
     /// looks captured over another background are dropped, so the native captions show until they are
-    /// captured again.
+    /// captured again. Caption strips are captured afresh too.
     func beginLookSession() {
         labelStyle = MissionControlLabelStyle.current()
         restingSignature = nil
@@ -28,9 +28,13 @@ extension MissionControlLabels {
         captureAttempts = [:]
         // A capture from the last session may still be running: it is ignored when it lands.
         isCapturing = false
+        isCapturingStrip = false
+        lastHovered = []
         captionLooks.beginSession()
+        let backgrounds = labelStyle == .nativeLook ? CaptionLooks.currentBackgrounds() : [:]
+        captionStrips.beginSession(backgrounds: backgrounds, screens: ScreenInfo.current())
         guard labelStyle == .nativeLook else { return }
-        let dropped = captionLooks.dropLooks(capturedOver: CaptionLooks.currentBackgrounds())
+        let dropped = captionLooks.dropLooks(capturedOver: backgrounds)
         if dropped > 0 { Self.log.log("Dropped looks captured over another background on \(dropped) screens") }
     }
 
@@ -40,12 +44,6 @@ extension MissionControlLabels {
     private static let captureSettle: TimeInterval = 0.3
 
     typealias FoundLook = CaptionLooks.Found
-
-    /// Whether a look may yet be captured for a caption that has none. If so its native caption shows
-    /// until then; if not, its label is drawn in the fallback style so the name still shows.
-    func lookMayArrive(for caption: Caption, on bar: BarLayout) -> Bool {
-        labelStyle == .nativeLook && captionLooks.lookMayArrive(for: caption, on: bar)
-    }
 
     /// Identifies the bars' layout at rest, so a capture can wait for it to settle.
     private static func signature(of bars: [BarLayout]) -> String {
@@ -65,7 +63,7 @@ extension MissionControlLabels {
 
     /// Once the bars have rested, fully in and unchanged, for a moment, captures them to match the
     /// native captions: each session, and again when they change, as when hovering expands the
-    /// thumbnails. Only the captions macOS draws are asked about: on a magnifying bar, the hovered one.
+    /// thumbnails. Magnifying bars are left out: their labels are drawn from their caption strips.
     func captureIfSettled(_ measured: [BarLayout], now: TimeInterval) {
         guard labelStyle == .nativeLook else { return }
         // Captions measured mid-slide sit off their resting places: wait for a measurement at rest.
@@ -73,7 +71,7 @@ extension MissionControlLabels {
             noteMotion()
             return
         }
-        let bars = measured.map { $0.showing(shownLabels(on: $0)) }
+        let bars = Self.barsCapturedByCaption(measured, magnification: magnification)
         let signature = Self.signature(of: bars)
         guard signature == restingSignature else {
             noteMotion()
@@ -121,6 +119,11 @@ extension MissionControlLabels {
         }
     }
 
+    /// The bars whose captions are captured one by one: all but those known to magnify.
+    static func barsCapturedByCaption(_ bars: [BarLayout], magnification: BarMagnification) -> [BarLayout] {
+        bars.filter { !magnification.magnifies($0) }
+    }
+
     /// Keeps a capture's looks, unless it is from an earlier session or the bars moved while it ran. The
     /// bars are captured again after another rest when it moved or failed to capture a caption.
     fileprivate func finishCapture(
@@ -147,7 +150,7 @@ extension MissionControlLabels {
 
 /// Lets a capture running off the main thread hand its looks back to the labels, which it only
 /// touches on the main thread.
-private final class WeakOwner: @unchecked Sendable {
+final class WeakOwner: @unchecked Sendable {
     weak var labels: MissionControlLabels?
 
     init(_ labels: MissionControlLabels) {

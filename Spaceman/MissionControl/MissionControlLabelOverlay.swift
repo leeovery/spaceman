@@ -22,9 +22,9 @@
 import AppKit
 
 /// A name label to draw, centred on `centre` on the screen whose frame is `screen`. Both are in
-/// AX coordinates: origin at the top-left of the primary display, y down. With a `look`, the label
-/// is drawn to match the native caption it covers, with its top-left at `lookOrigin`; otherwise as a
-/// box in its space's colour, or black for a space without one.
+/// AX coordinates: origin at the top-left of the primary display, y down. With a `look`, or on a
+/// magnifying bar a `strip` face, the label is drawn to match the native caption it covers, with its
+/// top-left at `lookOrigin`; otherwise as a box in its space's colour, or black for a space without one.
 struct MissionControlLabel {
     let name: String
     let covers: String
@@ -32,7 +32,8 @@ struct MissionControlLabel {
     let colorHex: String?
     let centre: CGPoint
     let screen: CGRect
-    let look: NativeCaptionLook.Variant?
+    var look: NativeCaptionLook.Variant?
+    var strip: StripFace?
     var lookOrigin: CGPoint?
     /// The height of the bar the label is on: how far a retraction of 1 moves it up.
     var barHeight: CGFloat = 0
@@ -368,8 +369,8 @@ private final class OverlayWindow: NSWindow {
 
 // MARK: - LabelLayer
 
-/// One name label, covering a "Desktop N" caption: the matched look's image, or a box with the
-/// name in its space's colour.
+/// One name label, covering a "Desktop N" caption: the matched look's image, a caption strip cropped
+/// under the name, or a box with the name in its space's colour.
 private final class LabelLayer: CALayer {
 
     struct Style: Equatable {
@@ -398,6 +399,10 @@ private final class LabelLayer: CALayer {
     private var content: Content?
     /// The matched look's image, while showing one.
     private var lookImage: CGImage?
+    /// While showing a strip face, whose strip is the layer's contents: the face, and its name and pill.
+    private var stripFace: StripFace?
+    private let stripName = CALayer()
+    private let stripPill = CALayer()
 
     private static let padding = NSSize(width: 6, height: 2)
     /// Room either side of the name inside the box, as the text field this replaced left.
@@ -408,7 +413,7 @@ private final class LabelLayer: CALayer {
     private static let noActions: [String: CAAction] = [
         "position": NSNull(), "bounds": NSNull(), "frame": NSNull(), "contents": NSNull(),
         "hidden": NSNull(), "backgroundColor": NSNull(), "cornerRadius": NSNull(),
-        "contentsScale": NSNull(), "string": NSNull(), "foregroundColor": NSNull(),
+        "contentsScale": NSNull(), "string": NSNull(), "foregroundColor": NSNull(), "contentsRect": NSNull(),
     ]
 
     static var height: CGFloat {
@@ -427,6 +432,13 @@ private final class LabelLayer: CALayer {
         text.alignmentMode = .center
         text.truncationMode = .end
         addSublayer(text)
+        for layer in [stripPill, stripName] {
+            layer.actions = Self.noActions
+            layer.isHidden = true
+            addSublayer(layer)
+        }
+        stripName.contentsGravity = .resize
+        stripPill.cornerRadius = MissionControlCaptionLook.pillRadius
     }
 
     /// Core Animation's copy of a layer, as for its presentation layer.
@@ -444,7 +456,13 @@ private final class LabelLayer: CALayer {
         if contentsScale != scale {
             contentsScale = scale
             text.contentsScale = scale
+            stripName.contentsScale = scale
         }
+        if let face = label.strip {
+            show(face)
+            return
+        }
+        if stripFace != nil { leaveStrip() }
         if let look = label.look {
             guard look.image !== lookImage else { return }
             lookImage = look.image
@@ -488,6 +506,49 @@ private final class LabelLayer: CALayer {
         // A text layer draws its line from the top: this centres it in the box as the text field did.
         text.frame = CGRect(
             x: 0, y: Self.padding.height, width: width, height: Self.height - Self.padding.height * 2)
+    }
+
+    /// Shows `face`: its strip as the layer's contents, cropped to the part behind the label, under its name and pill.
+    private func show(_ face: StripFace) {
+        guard face != stripFace else { return }
+        if stripFace == nil {
+            lookImage = nil
+            content = nil
+            text.isHidden = true
+            backgroundColor = nil
+            cornerRadius = 0
+            contentsGravity = .resize
+            stripName.isHidden = false
+        }
+        if stripFace?.strip !== face.strip { contents = face.strip }
+        stripFace = face
+        contentsRect = face.crop
+        let layout = face.layout
+        bounds = CGRect(origin: .zero, size: layout.size)
+        stripName.contents = face.name
+        stripName.frame = Self.layerFrame(layout.nameFrame, height: layout.size.height)
+        if let pill = layout.pill {
+            stripPill.frame = Self.layerFrame(pill.frame, height: layout.size.height)
+            stripPill.backgroundColor = pill.color
+            stripPill.isHidden = false
+        } else {
+            stripPill.isHidden = true
+        }
+    }
+
+    private func leaveStrip() {
+        stripFace = nil
+        contents = nil
+        contentsRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+        stripName.isHidden = true
+        stripPill.isHidden = true
+        text.isHidden = false
+        content = nil
+    }
+
+    /// `frame`, in points from the top-left of a layer `height` tall, y down, in the layer's own coordinates, y up.
+    private static func layerFrame(_ frame: CGRect, height: CGFloat) -> CGRect {
+        CGRect(x: frame.minX, y: height - frame.maxY, width: frame.width, height: frame.height)
     }
 
     /// The offset its own move gives it at `time`, in AX directions (y down).

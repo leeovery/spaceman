@@ -43,6 +43,9 @@ extension MissionControlLabels {
             let shown = shownLabels(on: bar)
             shownByBar.append((bar, shown))
             let ridingGrow = growing.map { frameTime < $0.reference + DockMotion.expand.delay + Self.growCaptionFade }
+            let magnifies = matching && magnification.magnifies(bar)
+            let strip = magnifies ? captionStrips.strip(for: bar) : nil
+            let style = magnifies ? stripStyle(for: bar, strip: strip) : nil
             for caption in bar.captions {
                 // A label macOS draws no caption for goes; one riding the grow from the names goes once the
                 // caption it covers has half faded.
@@ -50,8 +53,10 @@ extension MissionControlLabels {
                 var centre = CGPoint(x: caption.centre.x, y: caption.centre.y + offset)
                 // Covered by the zoom to another desktop, as the Dock's caption is.
                 if let cover = zoomCover, zoom?.screen == bar.screen, cover.contains(centre) { continue }
-                let found = matching ? captionLooks.look(for: caption, on: bar) : nil
-                guard found != nil || !lookMayArrive(for: caption, on: bar) else { continue }
+                let source = matching ? Self.lookSource(
+                    for: caption, on: bar, magnifies: magnifies, strips: captionStrips, looks: &captionLooks)
+                    : .fallback
+                if case .awaited = source { continue }
                 var dragged: TimedMove?
                 if let drag, drag.screen == bar.screen {
                     if caption.spaceID == drag.spaceID {
@@ -81,19 +86,15 @@ extension MissionControlLabels {
                         .earlier(by: clock.frameDuration / 2)
                     }
                 }
-                let variant = found?.look.variant(current: Self.isCurrent(
-                    caption, selected: selectedPlace, on: measured, currentSpaceIDs: currentSpaceIDs))
-                var label = Self.label(for: caption, centre: centre, screen: bar.screen, look: variant)
+                let current = Self.isCurrent(
+                    caption, selected: selectedPlace, on: measured, currentSpaceIDs: currentSpaceIDs)
+                let plain = Self.label(for: caption, centre: centre, screen: bar.screen, look: nil)
+                guard var label = dressed(plain, from: source, current: current, style: style) else { continue }
                 label.barHeight = bar.frame.height
                 label.shift = sliding
                 label.grow = moving
-                if let variant {
-                    // As high as the native caption was found with the bar this height, whichever thumbnail
-                    // it was under.
-                    label.lookOrigin = CGPoint(x: centre.x + variant.frame.minX, y: barTop + variant.top)
-                }
                 if let dropped = droppedSpace, dropped.spaceID == caption.spaceID {
-                    traceDropped(caption, label: label, look: found, at: frameTime, since: dropped.time)
+                    traceDropped(caption, label: label, look: source.captured, at: frameTime, since: dropped.time)
                 }
                 labels.append(label)
             }
@@ -103,6 +104,60 @@ extension MissionControlLabels {
         recordShown(shownByBar, at: frameTime)
         if MissionControlCaptionLook.isDebugging { trace(bars.first, labels: labels, retraction: retraction) }
         traceDrag(bars, labels: labels, at: frameTime)
+    }
+
+    /// Where a label's look comes from in the native look.
+    enum LookSource {
+        /// The caption strip of the magnifying bar it is on.
+        case strip(CaptionStrip)
+        /// A capture of its own caption, or one of its name elsewhere.
+        case captured(FoundLook)
+        /// None yet: macOS's own caption shows until one arrives.
+        case awaited
+        /// None will arrive: it is drawn in the fallback style, so the name still shows.
+        case fallback
+
+        var captured: FoundLook? {
+            if case .captured(let found) = self { return found }
+            return nil
+        }
+    }
+
+    /// Where `caption`'s look comes from on `bar`, in the native look. On a bar that `magnifies`, its strip, whatever
+    /// thumbnail it is under, with no capture of the caption itself; elsewhere a capture of the caption.
+    static func lookSource(
+        for caption: Caption, on bar: BarLayout, magnifies: Bool, strips: CaptionStrips, looks: inout CaptionLooks
+    ) -> LookSource {
+        if magnifies {
+            if let strip = strips.strip(for: bar) { return .strip(strip) }
+            return strips.mayArrive(for: bar) ? .awaited : .fallback
+        }
+        if let found = looks.look(for: caption, on: bar) { return .captured(found) }
+        return looks.lookMayArrive(for: caption, on: bar) ? .awaited : .fallback
+    }
+
+    /// `label` with its look from `source`, as the current space's or not, placed as high as the native caption sits
+    /// in a bar this tall; a strip's drawn in `style`. Nil when a strip's label can't be drawn: then macOS's caption
+    /// shows rather than the fallback.
+    private func dressed(
+        _ label: MissionControlLabel, from source: LookSource, current: Bool, style: CaptionStrip.Style?
+    ) -> MissionControlLabel? {
+        var dressed = label
+        let barTop = label.screen.minY
+        switch source {
+        case .strip(let strip):
+            guard let style, let drawn = stripFace(for: label, strip: strip, style: style, current: current)
+            else { return nil }
+            dressed.strip = drawn.face
+            dressed.lookOrigin = CGPoint(x: drawn.left, y: barTop + strip.top)
+        case .captured(let found):
+            dressed.look = found.look.variant(current: current)
+            // Whichever thumbnail the native caption was found under.
+            dressed.lookOrigin = dressed.look.map { CGPoint(x: label.centre.x + $0.frame.minX, y: barTop + $0.top) }
+        case .awaited, .fallback:
+            break
+        }
+        return dressed
     }
 
     /// Which of `bar`'s labels are drawn: on a bar of thumbnails that magnifies, only the hovered one's.
@@ -117,8 +172,14 @@ extension MissionControlLabels {
     static func isCurrent(
         _ caption: Caption, selected: Int?, on measured: BarLayout, currentSpaceIDs: Set<String>
     ) -> Bool {
-        guard let selected else { return currentSpaceIDs.contains(caption.spaceID) }
-        return measured.spaceIDs.indices.contains(selected) && measured.spaceIDs[selected] == caption.spaceID
+        isCurrent(spaceID: caption.spaceID, selected: selected, on: measured, currentSpaceIDs: currentSpaceIDs)
+    }
+
+    static func isCurrent(
+        spaceID: String, selected: Int?, on measured: BarLayout, currentSpaceIDs: Set<String>
+    ) -> Bool {
+        guard let selected else { return currentSpaceIDs.contains(spaceID) }
+        return measured.spaceIDs.indices.contains(selected) && measured.spaceIDs[selected] == spaceID
     }
 
     static func label(

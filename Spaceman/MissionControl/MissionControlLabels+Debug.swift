@@ -136,7 +136,7 @@ extension MissionControlLabels {
             guard let label = labels.first(where: { $0.key == caption.spaceID && $0.screen == bar.screen }) else {
                 return "\(caption.covers) at x \(Int(caption.centre.x.rounded())) not covered"
             }
-            let look = label.look == nil ? "box"
+            let look = label.strip != nil ? "strip" : label.look == nil ? "box"
                 : captionLooks.look(for: caption, on: bar)?.exact == true ? "exact" : "borrowed"
             let lift = retraction * bar.frame.height
             let drawn = label.lookOrigin.map { "\(Int($0.x.rounded())),\(Int(($0.y - lift).rounded()))" } ?? "centred"

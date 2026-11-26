@@ -139,12 +139,3 @@ enum ShownLabels: Equatable {
         }
     }
 }
-
-extension BarLayout {
-    /// This bar with only the captions whose labels `shown` draws.
-    func showing(_ shown: ShownLabels) -> BarLayout {
-        var showing = self
-        showing.captions = captions.filter(shown.shows)
-        return showing
-    }
-}

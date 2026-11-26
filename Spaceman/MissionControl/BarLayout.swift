@@ -172,19 +172,20 @@ struct Caption {
     let spaceID: String
 }
 
-/// A screen's frame in AX coordinates, its display and the display's UUID, read on the main thread
-/// for use on any.
+/// A screen's frame in AX coordinates, its display, the display's UUID and its pixels to the point, read on the
+/// main thread for use on any.
 struct ScreenInfo {
     let frame: CGRect
     let displayID: CGDirectDisplayID
     let uuid: String?
+    let scale: CGFloat
 
     static func current() -> [ScreenInfo] {
         NSScreen.screens.map { screen in
             let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
             return ScreenInfo(
                 frame: axFrame(of: screen), displayID: number?.uint32Value ?? 0,
-                uuid: MissionControlLabels.displayUUID(of: screen))
+                uuid: MissionControlLabels.displayUUID(of: screen), scale: screen.backingScaleFactor)
         }
     }
 

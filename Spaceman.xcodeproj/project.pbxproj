@@ -101,6 +101,9 @@
 		4B732666D43547C66A26008A /* MissionControlLabels+Debug.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EFF9EE7FF138C6509C8005E /* MissionControlLabels+Debug.swift */; };
 		F046CEB2556D14059AF6FFB7 /* MissionControlLabels+Captions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C941C8409F531DFFC0DF5B4E /* MissionControlLabels+Captions.swift */; };
 		7F3B0D5A2C4E6F8B0D1C3E5A /* BarMagnification.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E2A9C4F1B3D5E7A9C0B2D4F /* BarMagnification.swift */; };
+		6C81F66204FFF17041F463EC /* MissionControlLabels+Strips.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C697ED9AFAAB430E02D18C4 /* MissionControlLabels+Strips.swift */; };
+		E1F54F2F754B26B05B20BD97 /* CaptionStrips.swift in Sources */ = {isa = PBXBuildFile; fileRef = F308696316408D4CDD8650DD /* CaptionStrips.swift */; };
+		087F7A17933326FEF3D265E1 /* CaptionStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 216CC514A3A17A6E56A4681D /* CaptionStrip.swift */; };
 		7D5B1286F0D5C8B42C8DD2CE /* BarLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59AA1E88399F639900B66B05 /* BarLayout.swift */; };
 		ECC3556B6D1E3AFB699AA5F9 /* DockReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BFFD88C0EEE9909DA388BDB /* DockReader.swift */; };
 		5B72BF06AF4ACBEEB3FA862F /* FrameClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA38D229D429EF3A9F098DD9 /* FrameClock.swift */; };
@@ -214,6 +217,9 @@
 		8EFF9EE7FF138C6509C8005E /* MissionControlLabels+Debug.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MissionControlLabels+Debug.swift"; sourceTree = "<group>"; };
 		C941C8409F531DFFC0DF5B4E /* MissionControlLabels+Captions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MissionControlLabels+Captions.swift"; sourceTree = "<group>"; };
 		6E2A9C4F1B3D5E7A9C0B2D4F /* BarMagnification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarMagnification.swift; sourceTree = "<group>"; };
+		5C697ED9AFAAB430E02D18C4 /* MissionControlLabels+Strips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MissionControlLabels+Strips.swift"; sourceTree = "<group>"; };
+		F308696316408D4CDD8650DD /* CaptionStrips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionStrips.swift; sourceTree = "<group>"; };
+		216CC514A3A17A6E56A4681D /* CaptionStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionStrip.swift; sourceTree = "<group>"; };
 		59AA1E88399F639900B66B05 /* BarLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarLayout.swift; sourceTree = "<group>"; };
 		3BFFD88C0EEE9909DA388BDB /* DockReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockReader.swift; sourceTree = "<group>"; };
 		CA38D229D429EF3A9F098DD9 /* FrameClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameClock.swift; sourceTree = "<group>"; };
@@ -359,6 +365,9 @@
 			children = (
 				59AA1E88399F639900B66B05 /* BarLayout.swift */,
 				6E2A9C4F1B3D5E7A9C0B2D4F /* BarMagnification.swift */,
+				5C697ED9AFAAB430E02D18C4 /* MissionControlLabels+Strips.swift */,
+				F308696316408D4CDD8650DD /* CaptionStrips.swift */,
+				216CC514A3A17A6E56A4681D /* CaptionStrip.swift */,
 				9bd265fd2148a1acc46cde3d /* DockMotion.swift */,
 				3BFFD88C0EEE9909DA388BDB /* DockReader.swift */,
 				CA38D229D429EF3A9F098DD9 /* FrameClock.swift */,
@@ -666,6 +675,9 @@
 				F046CEB2556D14059AF6FFB7 /* MissionControlLabels+Captions.swift in Sources */,
 				7D5B1286F0D5C8B42C8DD2CE /* BarLayout.swift in Sources */,
 				7F3B0D5A2C4E6F8B0D1C3E5A /* BarMagnification.swift in Sources */,
+				6C81F66204FFF17041F463EC /* MissionControlLabels+Strips.swift in Sources */,
+				E1F54F2F754B26B05B20BD97 /* CaptionStrips.swift in Sources */,
+				087F7A17933326FEF3D265E1 /* CaptionStrip.swift in Sources */,
 				ECC3556B6D1E3AFB699AA5F9 /* DockReader.swift in Sources */,
 				5B72BF06AF4ACBEEB3FA862F /* FrameClock.swift in Sources */,
 				E732CE8A2F90F6BA00B2C067 /* QuickRenameView.swift in Sources */,

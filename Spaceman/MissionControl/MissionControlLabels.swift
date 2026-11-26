@@ -133,6 +133,17 @@ final class MissionControlLabels {
     var motionCount = 0
     /// Captures this session by the bars' signature, so captures that never agree stop retrying.
     var captureAttempts: [String: Int] = [:]
+    /// Magnifying bars' caption strips, which their labels are drawn from, and whether a capture of one is under way.
+    var captionStrips = CaptionStrips()
+    var isCapturingStrip = false
+    /// The names drawn over strips, rendered ahead of their thumbnails' hover.
+    var stripNames = StripNames()
+    /// Counts frames that found the bars moving, or not fully in, and changes of the thumbnail hovered on the bars at
+    /// rest, so a strip's capture can tell whether either changed while it ran. Thumbnails resizing count for neither.
+    var barMotionCount = 0
+    var hoverCount = 0
+    /// The labels each bar at rest last showed, to notice the hovered thumbnail changing.
+    var lastHovered: [ShownLabels] = []
     /// The style this session's labels are drawn in, fixed at its start so a session never mixes them.
     var labelStyle = MissionControlLabelStyle.spaceColors
     var requestedCaptureAccess = false
@@ -271,6 +282,10 @@ final class MissionControlLabels {
         swipe.onSwipe = { [weak self] in self?.beginTracking() }
         swipe.onClick = { [weak self] point in self?.handleClick(at: point) }
         swipe.onDrop = { [weak self] point in self?.handleDrop(at: point) }
+
+        if Self.spacesBarIsInDock {
+            CaptionStripStore.load { [weak self] stored in self?.captionStrips.adopt(stored) }
+        }
 
         // Start if already enabled
         if isEnabled {
@@ -554,7 +569,10 @@ final class MissionControlLabels {
         var resting = false
         let now = ProcessInfo.processInfo.systemUptime
         defer {
-            if !resting { noteMotion() }
+            if !resting {
+                noteMotion()
+                barMotionCount &+= 1
+            }
             captionLooks.noteBars(resting: resting, at: now)
         }
         // Replayed slides are worked out for when this frame reaches the screen.
@@ -627,6 +645,7 @@ final class MissionControlLabels {
                reflow == nil, drag == nil, swipe.pressedAt == nil, !layouts.isEmpty {
                 resting = true
                 captureIfSettled(layouts, now: now)
+                captureStripsIfDue(layouts, selected: reading.selected)
             }
         }
     }

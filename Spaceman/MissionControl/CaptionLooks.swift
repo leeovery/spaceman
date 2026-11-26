@@ -94,6 +94,21 @@ struct CaptionLooks {
         return byName[keys.name].map { ($0, false) }
     }
 
+    /// A text colour and a current-space pill colour, each nil where none was measured.
+    typealias Colors = (text: CGColor?, pill: CGColor?)
+
+    /// The colours captured on `screen` (a `Keys.screen`), each from looks with the bar `height` tall where any has
+    /// one, else from looks at any height, as the names row's.
+    func measuredColors(onScreen screen: String, height: CGFloat) -> Colors {
+        let onScreen = exact.filter { Self.screen(ofKey: $0.key) == screen }.sorted { $0.key < $1.key }
+        let atHeight = onScreen.filter { Self.height(ofKey: $0.key) == height.rounded() }.map(\.value)
+        let anyHeight = onScreen.map(\.value)
+        func first(_ color: (NativeCaptionLook) -> CGColor?) -> CGColor? {
+            atHeight.lazy.compactMap(color).first ?? anyHeight.lazy.compactMap(color).first
+        }
+        return (first { $0.textColor }, first { $0.pillColor })
+    }
+
     /// Whether a look may yet be captured for a caption that has none: not once a capture has found
     /// none for it or given up, nor once it has waited `lookWait` of the bars at rest.
     mutating func lookMayArrive(for caption: Caption, on bar: BarLayout) -> Bool {
@@ -191,6 +206,11 @@ struct CaptionLooks {
 
     private static func screen(ofKey key: String) -> String {
         String(key.prefix { $0 != "|" })
+    }
+
+    /// The bar's height in a `Keys.exact`, its last part.
+    private static func height(ofKey key: String) -> CGFloat? {
+        key.split(separator: "|").last.flatMap { Double($0) }.map { CGFloat($0) }
     }
 }
 
