@@ -28,6 +28,10 @@ Releases are signed with the owner's Developer ID, with the hardened runtime, th
 xcodebuild test -project Spaceman.xcodeproj -scheme Spaceman -destination platform=macOS
 ```
 
+The tests run in a Debug build, whose bundle ID is `com.leeovery.Spaceman.debug`. Keep it apart from the app's
+`com.leeovery.Spaceman`: a test build with the app's ID, signed differently, makes macOS turn off the installed
+app's Accessibility permission each time the tests run.
+
 ## Linting
 
 Never write `.swift` lines longer than 120 characters: SwiftLint will flag them.

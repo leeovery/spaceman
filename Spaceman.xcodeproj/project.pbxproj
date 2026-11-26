@@ -882,7 +882,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 2.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.leeovery.Spaceman;
+				PRODUCT_BUNDLE_IDENTIFIER = com.leeovery.Spaceman.debug;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "Spaceman/Spaceman-Bridging-Header.h";
