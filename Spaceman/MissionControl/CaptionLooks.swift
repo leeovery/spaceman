@@ -170,12 +170,6 @@ struct CaptionLooks {
         return Set(result.taken.filter { $0.value > movedAt }.keys)
     }
 
-    /// Takes in what `capture` found, unless it belongs to an earlier session or the bars moved while
-    /// it ran.
-    mutating func finish(_ capture: Capture, _ result: Result, moved: Bool) -> Outcome {
-        finish(capture, result, movedOn: moved ? Set(capture.asked.map(\.screen)) : [])
-    }
-
     /// Takes in what `capture` found, but for the screens `moved`, shot after the bars began to move, unless it
     /// belongs to an earlier session. A caption it found no look for is spent; one on a screen it failed to capture,
     /// or shot moving, is asked about again, unless this was the last attempt.

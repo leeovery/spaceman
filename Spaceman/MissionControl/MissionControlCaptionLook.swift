@@ -183,7 +183,6 @@ enum MissionControlCaptionLook {
 
     // MARK: - Capture
 
-    /// A capture's looks by caption key, and, while the motion recording is on, its report.
     /// A screen's captions matched: their looks, the report for the recorder, and when the shot came back (system
     /// uptime), if one was taken.
     typealias Captured = (looks: [String: NativeCaptionLook], report: CaptureReport?, taken: TimeInterval?)
@@ -359,17 +358,7 @@ enum MissionControlCaptionLook {
     }
 
     /// Matches each caption in `image`, whose top-left pixel sits at `origin` (AX coordinates)
-    /// with `scale` pixels to the point.
-    static func looks(
-        in image: CGImage,
-        origin: CGPoint,
-        scale: CGFloat,
-        captions: [CaptionToMatch]
-    ) -> [String: NativeCaptionLook] {
-        matches(in: image, origin: origin, scale: scale, captions: captions).looks
-    }
-
-    /// `looks(in:origin:scale:captions:)`, with why each caption it found no look for missed.
+    /// with `scale` pixels to the point, with why each caption it found no look for missed.
     static func matches(
         in image: CGImage,
         origin: CGPoint,

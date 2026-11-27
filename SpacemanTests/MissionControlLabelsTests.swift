@@ -186,7 +186,8 @@ final class MissionControlLabelsTests: XCTestCase {
     }
 
     private func matchSyntheticBar() throws -> [String: NativeCaptionLook] {
-        MissionControlCaptionLook.looks(in: try syntheticBar(), origin: .zero, scale: 2, captions: syntheticCaptions)
+        MissionControlCaptionLook.matches(
+            in: try syntheticBar(), origin: .zero, scale: 2, captions: syntheticCaptions).looks
     }
 
     func testTheCurrentSpaceGetsAPillOverTheNativeOne() throws {
@@ -268,10 +269,10 @@ final class MissionControlLabelsTests: XCTestCase {
         let image = try XCTUnwrap(context.makeImage())
 
         // The Dock's thumbnails put the caption's centre 25pt down; it is 45pt down.
-        let looks = MissionControlCaptionLook.looks(in: image, origin: .zero, scale: 2, captions: [
+        let looks = MissionControlCaptionLook.matches(in: image, origin: .zero, scale: 2, captions: [
             CaptionToMatch(key: "other", centre: CGPoint(x: 300, y: 25), barTop: 0, barBottom: 58,
                            maxWidth: 96, covers: "Desktop 2", name: "Fabric"),
-        ])
+        ]).looks
         let look = try XCTUnwrap(looks["other"]?.plain)
         XCTAssertEqual(look.top, 33, accuracy: 0.01)
         XCTAssertEqual(look.frame.height, 24, accuracy: 0.01)
@@ -298,10 +299,10 @@ final class MissionControlLabelsTests: XCTestCase {
         CTLineDraw(line, context)
         let image = try XCTUnwrap(context.makeImage())
 
-        let looks = MissionControlCaptionLook.looks(in: image, origin: .zero, scale: 2, captions: [
+        let looks = MissionControlCaptionLook.matches(in: image, origin: .zero, scale: 2, captions: [
             CaptionToMatch(key: "edge", centre: CGPoint(x: 300, y: 45), barTop: 0, barBottom: 58,
                            maxWidth: 96, covers: "Desktop 2", name: "Fabric"),
-        ])
+        ]).looks
         let look = try XCTUnwrap(looks["edge"]?.plain)
         XCTAssertEqual(look.top, 33, accuracy: 0.01)
         XCTAssertEqual(look.frame.height, 24, accuracy: 0.01)
@@ -365,16 +366,16 @@ final class MissionControlLabelsTests: XCTestCase {
         context.setFillColor(cgColor(barColor))
         context.fill(CGRect(x: 200, y: 0, width: 200, height: 10))
         let image = try XCTUnwrap(context.makeImage())
-        let looks = MissionControlCaptionLook.looks(in: image, origin: .zero, scale: 2, captions: [
+        let looks = MissionControlCaptionLook.matches(in: image, origin: .zero, scale: 2, captions: [
             CaptionToMatch(key: "cut", centre: CGPoint(x: 300, y: 45), barTop: 0, barBottom: 58, maxWidth: 96,
                            covers: "Desktop 2", name: "Fabric"),
-        ])
+        ]).looks
         XCTAssertNotNil(looks["cut"])
     }
 
     func testASliverBelowTheCaptionIsPassedOver() throws {
-        let looks = MissionControlCaptionLook.looks(
-            in: try barWithSliver(text: true), origin: .zero, scale: 2, captions: [sliverCaption])
+        let looks = MissionControlCaptionLook.matches(
+            in: try barWithSliver(text: true), origin: .zero, scale: 2, captions: [sliverCaption]).looks
         let look = try XCTUnwrap(looks["sliver"]?.plain)
         XCTAssertEqual(look.top, 33, accuracy: 0.01)
         XCTAssertEqual(look.frame.height, 24, accuracy: 0.01)
@@ -476,7 +477,7 @@ final class MissionControlLabelsTests: XCTestCase {
         var looks = CaptionLooks()
         let capture = looks.capture(of: [mainBar], attempt: 1)
         let result = CaptionLooks.Result(found: try found([mail, code], on: mainBar))
-        XCTAssertEqual(looks.finish(capture, result, moved: false), .kept)
+        XCTAssertEqual(looks.finish(capture, result, movedOn: []), .kept)
         XCTAssertEqual(looks.look(for: mail, on: bar(primary, retraction: 0.5, [mail]))?.exact, true)
         let moved = try XCTUnwrap(looks.look(for: caption(3, "Mail"), on: mainBar))
         XCTAssertFalse(moved.exact)
@@ -486,7 +487,7 @@ final class MissionControlLabelsTests: XCTestCase {
     func testALookCapturedWithTheBarAtAnotherHeightIsNeverUsed() throws {
         var looks = CaptionLooks()
         _ = looks.finish(looks.capture(of: [mainBar], attempt: 1),
-                         CaptionLooks.Result(found: try found([mail, code], on: mainBar)), moved: false)
+                         CaptionLooks.Result(found: try found([mail, code], on: mainBar)), movedOn: [])
         let expanded = bar(primary, height: 146, [mail, caption(3, "Mail")])
         XCTAssertNil(looks.look(for: mail, on: expanded))
         XCTAssertNil(looks.look(for: caption(3, "Mail"), on: expanded))
@@ -498,7 +499,7 @@ final class MissionControlLabelsTests: XCTestCase {
         let capture = looks.capture(of: [mainBar], attempt: 1)
         let result = CaptionLooks.Result(
             found: try found([mail, code], on: mainBar), backgrounds: [primaryKey: "hills"])
-        _ = looks.finish(capture, result, moved: false)
+        _ = looks.finish(capture, result, movedOn: [])
         XCTAssertEqual(looks.backgrounds, [primaryKey: "hills"])
     }
 
@@ -506,7 +507,7 @@ final class MissionControlLabelsTests: XCTestCase {
         var looks = CaptionLooks()
         let capture = looks.capture(of: [mainBar], attempt: 1)
         let result = CaptionLooks.Result(found: try found([mail], on: mainBar), backgrounds: [primaryKey: "hills"])
-        XCTAssertEqual(looks.finish(capture, result, moved: true), .moved)
+        XCTAssertEqual(looks.finish(capture, result, movedOn: [primaryKey]), .moved)
         XCTAssertEqual(looks.backgrounds, [:])
         XCTAssertNil(looks.look(for: mail, on: mainBar))
         XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar))
@@ -543,7 +544,7 @@ final class MissionControlLabelsTests: XCTestCase {
     func testTheLastAttemptTheBarsMovedUnderSpendsEveryCaption() {
         var looks = CaptionLooks()
         let capture = looks.capture(of: [mainBar], attempt: CaptionLooks.attemptLimit)
-        _ = looks.finish(capture, CaptionLooks.Result(), moved: true)
+        _ = looks.finish(capture, CaptionLooks.Result(), movedOn: [primaryKey])
         XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar))
         XCTAssertFalse(looks.lookMayArrive(for: code, on: mainBar))
     }
@@ -553,7 +554,7 @@ final class MissionControlLabelsTests: XCTestCase {
     func testACaptionACaptureFoundNoLookForIsSpentWhereverTheBarIsAtThatHeight() throws {
         var looks = CaptionLooks()
         let capture = looks.capture(of: [bar(primary, retraction: 0.2, [mail, code])], attempt: 1)
-        XCTAssertEqual(looks.finish(capture, CaptionLooks.Result(found: try found([mail], on: mainBar)), moved: false),
+        XCTAssertEqual(looks.finish(capture, CaptionLooks.Result(found: try found([mail], on: mainBar)), movedOn: []),
                        .kept)
         XCTAssertFalse(looks.lookMayArrive(for: code, on: bar(primary, retraction: 0.7, [mail, code])))
         XCTAssertTrue(looks.lookMayArrive(for: code, on: bar(primary, height: 146, [mail, code])))
@@ -564,15 +565,15 @@ final class MissionControlLabelsTests: XCTestCase {
     func testACaptureMovingACaptionKeepsTheLookInUseUntilAnotherAgrees() throws {
         var looks = CaptionLooks()
         _ = looks.finish(looks.capture(of: [mainBar], attempt: 1),
-                         CaptionLooks.Result(found: try found([mail, code], on: mainBar)), moved: false)
+                         CaptionLooks.Result(found: try found([mail, code], on: mainBar)), movedOn: [])
         let mailKey = CaptionLooks.keys(bar: mainBar, caption: mail).exact
         let moved = CaptionLooks.Result(found: [mailKey: try look(top: -1.5)])
-        XCTAssertEqual(looks.finish(looks.capture(of: [bar(primary, [mail])], attempt: 2), moved, moved: false),
+        XCTAssertEqual(looks.finish(looks.capture(of: [bar(primary, [mail])], attempt: 2), moved, movedOn: []),
                        .retry)
         XCTAssertEqual(looks.look(for: mail, on: mainBar)?.look.plain?.top, 7.5)
         XCTAssertEqual(looks.look(for: caption(3, "Mail"), on: mainBar)?.look.plain?.top, 7.5)
         let agreeing = CaptionLooks.Result(found: [mailKey: try look(top: -1.25)])
-        XCTAssertEqual(looks.finish(looks.capture(of: [bar(primary, [mail])], attempt: 3), agreeing, moved: false),
+        XCTAssertEqual(looks.finish(looks.capture(of: [bar(primary, [mail])], attempt: 3), agreeing, movedOn: []),
                        .kept)
         XCTAssertEqual(looks.look(for: mail, on: mainBar)?.look.plain?.top, -1.25)
     }
@@ -583,7 +584,7 @@ final class MissionControlLabelsTests: XCTestCase {
         let result = CaptionLooks.Result(
             found: try found([mail, code], on: mainBar), failed: [builtInKey],
             backgrounds: [primaryKey: "hills", builtInKey: "sea"])
-        XCTAssertEqual(looks.finish(capture, result, moved: false), .retry)
+        XCTAssertEqual(looks.finish(capture, result, movedOn: []), .retry)
         XCTAssertTrue(looks.lookMayArrive(for: caption(1, "Notes"), on: builtInBar))
         XCTAssertEqual(looks.backgrounds, [primaryKey: "hills"])
     }
@@ -591,7 +592,7 @@ final class MissionControlLabelsTests: XCTestCase {
     func testAScreenTheLastAttemptFailedOnIsSpent() {
         var looks = CaptionLooks()
         let capture = looks.capture(of: [builtInBar], attempt: CaptionLooks.attemptLimit)
-        XCTAssertEqual(looks.finish(capture, CaptionLooks.Result(failed: [builtInKey]), moved: false), .kept)
+        XCTAssertEqual(looks.finish(capture, CaptionLooks.Result(failed: [builtInKey]), movedOn: []), .kept)
         XCTAssertFalse(looks.lookMayArrive(for: caption(1, "Notes"), on: builtInBar))
     }
 
@@ -600,7 +601,7 @@ final class MissionControlLabelsTests: XCTestCase {
         let capture = looks.capture(of: [mainBar], attempt: CaptionLooks.attemptLimit)
         looks.beginSession()
         let result = CaptionLooks.Result(found: try found([mail], on: mainBar), backgrounds: [primaryKey: "hills"])
-        XCTAssertEqual(looks.finish(capture, result, moved: false), .stale)
+        XCTAssertEqual(looks.finish(capture, result, movedOn: []), .stale)
         XCTAssertNil(looks.look(for: mail, on: mainBar))
         XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar))
         XCTAssertEqual(looks.backgrounds, [:])
@@ -608,7 +609,7 @@ final class MissionControlLabelsTests: XCTestCase {
 
     func testANewSessionWaitsForLooksAgain() {
         var looks = CaptionLooks()
-        _ = looks.finish(looks.capture(of: [mainBar], attempt: 1), CaptionLooks.Result(), moved: false)
+        _ = looks.finish(looks.capture(of: [mainBar], attempt: 1), CaptionLooks.Result(), movedOn: [])
         XCTAssertFalse(looks.lookMayArrive(for: mail, on: mainBar))
         looks.beginSession()
         XCTAssertTrue(looks.lookMayArrive(for: mail, on: mainBar))
@@ -677,7 +678,7 @@ final class MissionControlLabelsTests: XCTestCase {
             found: try found([mail, code], on: mainBar)
                 .merging(try found([caption(1, "Notes")], on: builtInBar)) { $1 },
             backgrounds: [primaryKey: "hills", builtInKey: "sea"])
-        _ = looks.finish(capture, result, moved: false)
+        _ = looks.finish(capture, result, movedOn: [])
         looks.beginSession()
         let current = [primaryKey: "hills", builtInKey: "desert"]
         XCTAssertEqual(looks.dropLooks(capturedOver: current), 1)
@@ -2005,14 +2006,14 @@ final class MissionControlLabelsTests: XCTestCase {
         }
         let namesLooks = [CaptionLooks.keys(bar: names, caption: mail).exact:
                             try colored(namesRowText, bar: (10, 10, 40))]
-        _ = looks.finish(looks.capture(of: [names], attempt: 1), CaptionLooks.Result(found: namesLooks), moved: false)
+        _ = looks.finish(looks.capture(of: [names], attempt: 1), CaptionLooks.Result(found: namesLooks), movedOn: [])
         var colors = looks.measuredColors(onScreen: primaryKey, height: 146)
         assertColor(try components(try XCTUnwrap(colors.text)), namesRowText)
         assertColor(try components(try XCTUnwrap(colors.bar)), (10, 10, 40))
         let expandedLooks = [CaptionLooks.keys(bar: expanded, caption: caption(3, "Docs")).exact:
                                 try colored(textColor, bar: barColor)]
         _ = looks.finish(looks.capture(of: [expanded], attempt: 1), CaptionLooks.Result(found: expandedLooks),
-                         moved: false)
+                         movedOn: [])
         colors = looks.measuredColors(onScreen: primaryKey, height: 146)
         assertColor(try components(try XCTUnwrap(colors.text)), textColor)
         assertColor(try components(try XCTUnwrap(colors.bar)), barColor)
@@ -2091,7 +2092,7 @@ final class MissionControlLabelsTests: XCTestCase {
         let names = thumbnailBar(height: 40)
         var looks = CaptionLooks()
         _ = looks.finish(looks.capture(of: [names], attempt: 1),
-                         CaptionLooks.Result(found: try found(names.captions, on: names)), moved: false)
+                         CaptionLooks.Result(found: try found(names.captions, on: names)), movedOn: [])
         for kept in [nil, try strip()] {
             var strips = strips()
             if let kept { strips.adopt([magnifiedKey: kept]) }
@@ -2265,7 +2266,7 @@ final class MissionControlLabelsTests: XCTestCase {
             for: caption, on: fifteen, strip: nil, leaving: nil, looks: &looks)
         else { return XCTFail("a bar that doesn't magnify waits for its caption's own capture") }
         let found = [CaptionLooks.keys(bar: fifteen, caption: caption).exact: try look(top: 127)]
-        _ = looks.finish(looks.capture(of: [fifteen], attempt: 1), CaptionLooks.Result(found: found), moved: false)
+        _ = looks.finish(looks.capture(of: [fifteen], attempt: 1), CaptionLooks.Result(found: found), movedOn: [])
         guard case .captured(let captured) = MissionControlLabels.lookSource(
             for: caption, on: fifteen, strip: nil, leaving: nil, looks: &looks)
         else { return XCTFail("a bar that doesn't magnify takes its caption's own capture") }
@@ -2712,7 +2713,7 @@ final class MissionControlLabelsTests: XCTestCase {
             found[CaptionLooks.keys(bar: mainBar, caption: caption).exact] = made
         }
         _ = looks.finish(looks.capture(of: [mainBar], attempt: 1),
-                         CaptionLooks.Result(found: found, backgrounds: [primaryKey: background]), moved: false)
+                         CaptionLooks.Result(found: found, backgrounds: [primaryKey: background]), movedOn: [])
         return looks
     }
 
@@ -2801,7 +2802,7 @@ final class MissionControlLabelsTests: XCTestCase {
         var found: [String: NativeCaptionLook] = [:]
         found[CaptionLooks.keys(bar: mainBar, caption: mail).exact] = try look(top: 9)
         _ = looks.finish(looks.capture(of: [bar(primary, [mail])], attempt: 1),
-                         CaptionLooks.Result(found: found, backgrounds: [primaryKey: "hills"]), moved: false)
+                         CaptionLooks.Result(found: found, backgrounds: [primaryKey: "hills"]), movedOn: [])
         XCTAssertEqual(looks.adopt(try namesRowLooksFromDisk(), screens: [primaryInfo], current: [primaryKey: "hills"]),
                        1)
         XCTAssertEqual(looks.look(for: mail, on: mainBar)?.look.plain?.top, 9)
