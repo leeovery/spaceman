@@ -12,7 +12,7 @@
 //  When the labels are hidden it writes "ours" alone.
 //
 //  With the missionControlMotionVideo default as well, it also films Mission Control's own captions:
-//  it streams the top of the main display with ScreenCaptureKit, without Spaceman's windows, and saves
+//  it streams the top of the main display with ScreenCaptureKit, without Spaceman, and saves
 //  it as video at one pixel a point to motion-frame.mov beside the log, logging each frame's display
 //  time as "video frame <index>". The band is missionControlMotionBand points tall, 150 by default
 //  (down to the captions of a hover-expanded bar), made even and kept within the display. Every 5
@@ -68,7 +68,6 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
     /// Used only on `logQueue`.
     private var file: FileHandle?
     private var filmings: [Filming] = []
-    private var display: SCDisplay?
     private var isStarting = false
 
     /// Opens the log and, filming, starts streaming if allowed to record the screen. Main thread.
@@ -88,27 +87,12 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
         if Self.isEnabled { note("recorder stopped") }
     }
 
-    /// Leaves Spaceman's windows out of the films that hide them, as they now are. Its label windows are
-    /// made as Mission Control first opens, after the streams start, so call this after each session.
-    /// Main thread.
-    func refreshOwnWindows() {
-        let streams = filmings.filter(\.film.hidesSpaceman).map(\.stream)
-        guard !streams.isEmpty, let display else { return }
-        Task {
-            do {
-                let filter = SCContentFilter(display: display, excludingWindows: try await Self.ownWindows())
-                for stream in streams { try await stream.updateContentFilter(filter) }
-            } catch {
-                note("recorder: couldn't catch up with Spaceman's windows: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    /// Spaceman's windows, shown or hidden.
-    private static func ownWindows() async throws -> [SCWindow] {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-        let pid = getpid()
-        return content.windows.filter { $0.owningApplication?.processID == pid }
+    /// Of `applications`, the one running as process `pid`: Spaceman, left out of the films that hide it as an
+    /// application, so windows it makes after a film starts, as its label windows are, are left out too.
+    static func spaceman<Application>(
+        among applications: [Application], pid: pid_t = getpid(), processID: (Application) -> pid_t
+    ) -> [Application] {
+        applications.filter { processID($0) == pid }
     }
 
     /// Writes `text`, stamped with `time` (system uptime). Any thread.
@@ -149,13 +133,11 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
     /// Starts each of `films` streaming the main display; one failing leaves the others filming.
     private func startFilming(_ films: [Film]) async {
         var started: [Filming] = []
-        var filmed: SCDisplay?
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             let mainID = CGMainDisplayID()
             if let display = content.displays.first(where: { $0.displayID == mainID }) {
-                filmed = display
-                let own = try await Self.ownWindows()
+                let own = Self.spaceman(among: content.applications) { $0.processID }
                 for film in films {
                     do {
                         started.append(try await startFilming(film, display: display, hiding: own))
@@ -169,16 +151,18 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
         } catch {
             note("recorder failed: \(error.localizedDescription)")
         }
-        await MainActor.run { [started, filmed] in
+        await MainActor.run { [started] in
             filmings = started
-            display = filmed
             isStarting = false
         }
     }
 
-    /// Films the top of `display` for `film`, leaving out `own`, Spaceman's windows, if the film hides them.
-    private func startFilming(_ film: Film, display: SCDisplay, hiding own: [SCWindow]) async throws -> Filming {
-        let filter = SCContentFilter(display: display, excludingWindows: film.hidesSpaceman ? own : [])
+    /// Films the top of `display` for `film`, leaving out `own`, Spaceman, if the film hides it.
+    private func startFilming(
+        _ film: Film, display: SCDisplay, hiding own: [SCRunningApplication]
+    ) async throws -> Filming {
+        let filter = SCContentFilter(
+            display: display, excludingApplications: film.hidesSpaceman ? own : [], exceptingWindows: [])
         let config = SCStreamConfiguration()
         // H.264 takes only even dimensions.
         config.width = display.width / 2 * 2

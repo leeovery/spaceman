@@ -7,8 +7,8 @@
 
 import AppKit
 
-/// The looks captured for the captions, kept across sessions while the screens show what they were
-/// captured over, and the captions this session's captures could find no look for.
+/// The looks captured for the captions, kept across sessions, and on disk across launches, while the screens show
+/// what they were captured over, and the captions this session's captures could find no look for.
 struct CaptionLooks {
 
     /// A look for a caption with the bar at its height: captured for it exactly, or borrowed from its name.
@@ -52,6 +52,18 @@ struct CaptionLooks {
         case retry
     }
 
+    /// A screen's looks as kept on disk: what it showed behind them, and each look by its keys less the screen's.
+    struct ScreenLooks {
+        struct Entry {
+            let exact: String
+            let name: String
+            let look: NativeCaptionLook
+        }
+
+        let background: String
+        let entries: [Entry]
+    }
+
     static let attemptLimit = 4
     /// How long, of the bars at rest, a caption waits for its look before its label is drawn in the
     /// fallback style, so names show though no capture ever runs, as when a bar is never reported fully
@@ -60,6 +72,8 @@ struct CaptionLooks {
 
     private var exact: [String: NativeCaptionLook] = [:]
     private var byName: [String: NativeCaptionLook] = [:]
+    /// Each look in `exact`'s `Keys.name`, by its `Keys.exact`.
+    private var nameKeys: [String: String] = [:]
     /// Captures that placed a caption away from its look in use, each waiting for another to agree.
     private var waiting: [String: NativeCaptionLook] = [:]
     /// This session's captions no look can arrive for, by `Keys.exact`: a capture with the bar at one height
@@ -180,7 +194,47 @@ struct CaptionLooks {
         guard let use = settled.use else { return false }
         exact[keys.exact] = use
         byName[keys.name] = use
+        nameKeys[keys.exact] = keys.name
         return true
+    }
+
+    /// `screen`'s looks (a `Keys.screen`), to keep on disk: those in use, with what it showed behind them. Nil for
+    /// a screen whose background isn't known.
+    func screenLooks(_ screen: String) -> ScreenLooks? {
+        guard let background = backgrounds[screen] else { return nil }
+        let prefix = screen.count + 1
+        let entries = exact.filter { Self.screen(ofKey: $0.key) == screen }.sorted { $0.key < $1.key }
+            .compactMap { key, look in
+                nameKeys[key].map { ScreenLooks.Entry(exact: String(key.dropFirst(prefix)),
+                                                      name: String($0.dropFirst(prefix)), look: look) }
+            }
+        return ScreenLooks(background: background, entries: entries)
+    }
+
+    /// Takes looks kept on disk, by `CaptionLookStore.file`, for `screens`: only those captured over what each
+    /// screen shows now, its `current` background, by `Keys.screen`, and only for captions this run has no look
+    /// for, on screens it hasn't captured over another background. Returns how many it took.
+    mutating func adopt(
+        _ stored: [String: ScreenLooks], screens: [ScreenInfo], current: [String: String]
+    ) -> Int {
+        var taken = 0
+        for info in screens {
+            guard let uuid = info.uuid,
+                  let kept = stored[CaptionLookStore.file(display: uuid, screen: info.frame.size)]
+            else { continue }
+            let screen = Self.screenKey(info.frame)
+            guard current[screen] == kept.background, (backgrounds[screen] ?? kept.background) == kept.background
+            else { continue }
+            backgrounds[screen] = kept.background
+            for entry in kept.entries where exact["\(screen)|\(entry.exact)"] == nil {
+                let keys = Keys(screen: screen, exact: "\(screen)|\(entry.exact)", name: "\(screen)|\(entry.name)")
+                exact[keys.exact] = entry.look
+                if byName[keys.name] == nil { byName[keys.name] = entry.look }
+                nameKeys[keys.exact] = keys.name
+                taken += 1
+            }
+        }
+        return taken
     }
 
     /// Drops the looks captured over another background than the screens show now, so their native
@@ -190,6 +244,7 @@ struct CaptionLooks {
         guard !stale.isEmpty else { return 0 }
         exact = Self.dropping(exact, on: stale)
         byName = Self.dropping(byName, on: stale)
+        nameKeys = Self.dropping(nameKeys, on: stale)
         waiting = Self.dropping(waiting, on: stale)
         spent = spent.filter { !stale.contains(Self.screen(ofKey: $0)) }
         for screen in stale { backgrounds[screen] = nil }

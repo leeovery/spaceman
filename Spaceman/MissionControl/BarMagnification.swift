@@ -9,9 +9,10 @@
 import AppKit
 
 /// Which expanded bars magnify, by screen and number of thumbnails, learned from the Dock's reports and
-/// kept for the run, so a later session knows from the first frame of the grow. macOS draws a magnifying
-/// bar's caption only under the hovered thumbnail. A bar not yet known is labelled as one that doesn't
-/// magnify, and its thumbnails are followed as a magnifying bar's, so one reading tells.
+/// kept for the run and on disk, so a later session, even the first after a launch, knows from the first frame
+/// of the grow. macOS draws a magnifying bar's caption only under the hovered thumbnail. A bar not yet known is
+/// labelled as one that doesn't magnify, and its thumbnails are followed as a magnifying bar's, so one reading
+/// tells.
 struct BarMagnification {
 
     enum Learned: Equatable {
@@ -30,11 +31,35 @@ struct BarMagnification {
     private var learned: [String: Learned] = [:]
     /// Since when the pointer has been on one of each bar's thumbnails, all one width, without a break.
     private var evenSince: [String: TimeInterval] = [:]
+    /// Each display's UUID, which, unlike its ID, stays the same from one launch to the next.
+    private var displays: [CGDirectDisplayID: String] = [:]
 
-    /// A bar's screen, by display and width, and its number of thumbnails: whether its thumbnails fit
-    /// at full size.
+    /// A bar's screen, by display and width, and its number of thumbnails, for the run.
     static func key(of bar: BarLayout) -> String {
         "\(bar.displayID)|\(Int(bar.screen.width.rounded()))|\(bar.buttons.count)"
+    }
+
+    /// What is learned of `bar` is kept by: its screen, by display UUID and width, and its number of thumbnails,
+    /// whether its thumbnails fit at full size. A display whose UUID isn't known goes by its ID, for the run only.
+    private func learnedKey(of bar: BarLayout) -> String {
+        "\(displays[bar.displayID] ?? "#\(bar.displayID)")|\(Int(bar.screen.width.rounded()))|\(bar.buttons.count)"
+    }
+
+    /// What has been learned of bars on displays known by UUID, to keep on disk.
+    var kept: [String: Learned] {
+        learned.filter { !$0.key.hasPrefix("#") }
+    }
+
+    /// Notes the displays `screens` are on, by UUID.
+    mutating func know(_ screens: [ScreenInfo]) {
+        for screen in screens {
+            if let uuid = screen.uuid { displays[screen.displayID] = uuid }
+        }
+    }
+
+    /// Takes what was learned in earlier runs, for bars this run hasn't learned about.
+    mutating func adopt(_ stored: [String: Learned]) {
+        learned.merge(stored) { current, _ in current }
     }
 
     /// Whether `bar` shows thumbnails that differ in width, as only magnified ones do.
@@ -48,13 +73,13 @@ struct BarMagnification {
 
     /// Whether `bar` shows thumbnails known to magnify: never a bar of names.
     func magnifies(_ bar: BarLayout) -> Bool {
-        bar.frame.height > MissionControlLabels.expandedBarHeight && learned[Self.key(of: bar)] == .magnifies
+        bar.frame.height > MissionControlLabels.expandedBarHeight && learned[learnedKey(of: bar)] == .magnifies
     }
 
     /// Whether `bar`'s thumbnails are read one by one as they resize: thumbnails known to magnify, or not
     /// known yet. Never a bar of names, nor thumbnails known not to magnify.
     func follows(_ bar: BarLayout) -> Bool {
-        bar.frame.height > MissionControlLabels.expandedBarHeight && learned[Self.key(of: bar)] != .doesNotMagnify
+        bar.frame.height > MissionControlLabels.expandedBarHeight && learned[learnedKey(of: bar)] != .doesNotMagnify
     }
 
     /// Learns from `bar` as the Dock reported it in a reading taken at `read`, with the pointer at `pointer`
@@ -65,7 +90,7 @@ struct BarMagnification {
     /// wrong guess. Returns what it learned, when that changed.
     mutating func learn(from bar: BarLayout, read: TimeInterval, pointer: CGPoint?, at time: TimeInterval)
         -> Learned? {
-        let key = Self.key(of: bar)
+        let key = learnedKey(of: bar)
         let top = bar.screen.minY
         guard bar.frame.height > MissionControlLabels.expandedBarHeight, let pointer,
               (top...(top + bar.frame.height)).contains(pointer.y),

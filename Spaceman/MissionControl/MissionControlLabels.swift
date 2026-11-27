@@ -293,6 +293,8 @@ final class MissionControlLabels {
 
         if Self.spacesBarIsInDock {
             CaptionStripStore.load { [weak self] stored in self?.captionStrips.adopt(stored) }
+            BarMagnificationStore.load { [weak self] stored in self?.magnification.adopt(stored) }
+            CaptionLookStore.load { [weak self] stored in self?.adoptLooks(stored) }
         }
 
         // Start if already enabled
@@ -547,9 +549,6 @@ final class MissionControlLabels {
         pointer = nil
         shownLayouts = []
         sawBar = false
-        if MissionControlMotionRecorder.isEnabled {
-            MissionControlMotionRecorder.shared.refreshOwnWindows()
-        }
         clock.stop()
         reader.end()
         overlay.hide()
@@ -767,6 +766,7 @@ final class MissionControlLabels {
             let labelling = learned == .magnifies ? "only the hovered one" : "every thumbnail"
             Self.log.log("\(found, privacy: .public): labelling \(labelling, privacy: .public)")
             record(found, at: time)
+            BarMagnificationStore.save(magnification.kept)
         }
     }
 

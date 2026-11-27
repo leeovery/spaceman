@@ -6,8 +6,6 @@
 //
 
 import AppKit
-import ImageIO
-import os
 
 /// The magnifying bars' caption strips, kept for the run and in Spaceman's caches folder so even a run's first hover
 /// is labelled at once, and this session's captures of them. Each session captures each strip until two captures
@@ -343,8 +341,7 @@ struct StripDrawing {
 /// The strips kept in Spaceman's caches folder, one file each, read and written off the main thread.
 enum CaptionStripStore {
 
-    private static let log = Logger(subsystem: Constants.AppInfo.bundleId, category: "missionControlLook")
-    private static let queue = DispatchQueue(label: "\(Constants.AppInfo.bundleId).captionStrips", qos: .utility)
+    private static let folder = "CaptionStrips"
     private static let version = 2
 
     /// A strip as written: the image as PNG, with what was measured. Colours are components in the image's space.
@@ -368,55 +365,28 @@ enum CaptionStripStore {
         let background: String
     }
 
-    private static var folder: URL? {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-            .appendingPathComponent(Constants.AppInfo.bundleId, isDirectory: true)
-            .appendingPathComponent("CaptionStrips", isDirectory: true)
-    }
-
     /// Writes `strip` in place of the one kept for `key`.
     static func save(_ strip: CaptionStrip, key: String) {
-        queue.async {
-            guard let folder, let data = encode(strip) else { return }
-            do {
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                try data.write(to: folder.appendingPathComponent("\(key).plist"), options: .atomic)
-            } catch {
-                log.log("Couldn't keep a caption strip: \(error.localizedDescription, privacy: .public)")
-            }
-        }
+        CacheFiles.write(key, in: folder) { encode(strip) }
     }
 
     /// Reads every strip kept, by key, and hands them to `done` on the main thread.
     static func load(_ done: @escaping ([String: CaptionStrip]) -> Void) {
-        queue.async {
-            var strips: [String: CaptionStrip] = [:]
-            let files = folder.flatMap {
-                try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil)
-            }
-            for file in files ?? [] where file.pathExtension == "plist" {
-                guard let data = try? Data(contentsOf: file), let strip = decode(data) else { continue }
-                strips[file.deletingPathExtension().lastPathComponent] = strip
-            }
-            DispatchQueue.main.async { done(strips) }
-        }
+        CacheFiles.readAll(in: folder, decode: decode, done: done)
     }
 
     static func encode(_ strip: CaptionStrip) -> Data? {
-        let png = NSMutableData()
         let space = strip.image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)
-        guard let space, let destination = CGImageDestinationCreateWithData(png, "public.png" as CFString, 1, nil),
+        guard let space, let png = CacheFiles.png(of: strip.image),
               let textColor = components(of: strip.text.color, in: space)
         else { return nil }
-        CGImageDestinationAddImage(destination, strip.image, nil)
-        guard CGImageDestinationFinalize(destination) else { return nil }
         let pill = strip.pill.flatMap { pill in
             components(of: pill.color, in: space).map {
                 Stored.Pill(padding: pill.padding, above: pill.above, below: pill.below, color: $0)
             }
         }
         let stored = Stored(
-            version: version, png: png as Data, scale: strip.scale, top: strip.top, baseline: strip.baseline,
+            version: version, png: png, scale: strip.scale, top: strip.top, baseline: strip.baseline,
             lineOffset: strip.lineOffset, fontSize: strip.text.fontSize, textColor: textColor, pill: pill,
             background: strip.background)
         return try? PropertyListEncoder().encode(stored)
@@ -424,8 +394,7 @@ enum CaptionStripStore {
 
     static func decode(_ data: Data) -> CaptionStrip? {
         guard let stored = try? PropertyListDecoder().decode(Stored.self, from: data), stored.version == version,
-              let source = CGImageSourceCreateWithData(stored.png as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              let image = CacheFiles.image(png: stored.png),
               let space = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
               let textColor = color(stored.textColor, in: space)
         else { return nil }

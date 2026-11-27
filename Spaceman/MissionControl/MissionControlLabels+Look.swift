@@ -34,7 +34,9 @@ extension MissionControlLabels {
         preparedStyles = [:]
         captionLooks.beginSession()
         let backgrounds = labelStyle == .nativeLook ? CaptionLooks.currentBackgrounds() : [:]
-        captionStrips.beginSession(backgrounds: backgrounds, screens: ScreenInfo.current())
+        let screens = ScreenInfo.current()
+        magnification.know(screens)
+        captionStrips.beginSession(backgrounds: backgrounds, screens: screens)
         guard labelStyle == .nativeLook else { return }
         let dropped = captionLooks.dropLooks(capturedOver: backgrounds)
         if dropped > 0 { Self.log.log("Dropped looks captured over another background on \(dropped) screens") }
@@ -121,6 +123,25 @@ extension MissionControlLabels {
         }
     }
 
+    /// Writes the looks in use on `screens` (`CaptionLooks.Keys.screen`) to disk, each with its background.
+    private func keepLooks(on screens: Set<String>) {
+        for info in ScreenInfo.current() {
+            let screen = CaptionLooks.screenKey(info.frame)
+            guard screens.contains(screen), let uuid = info.uuid, let looks = captionLooks.screenLooks(screen)
+            else { continue }
+            CaptionLookStore.save(looks, file: CaptionLookStore.file(display: uuid, screen: info.frame.size))
+        }
+    }
+
+    /// Takes the looks read from disk at launch, for the screens as they are, over what they show now.
+    func adoptLooks(_ stored: [String: CaptionLooks.ScreenLooks]) {
+        let taken = captionLooks.adopt(
+            stored, screens: ScreenInfo.current(), current: CaptionLooks.currentBackgrounds())
+        guard taken > 0 else { return }
+        captionStrips.looksChanged()
+        Self.log.log("Took \(taken) caption looks kept from before")
+    }
+
     /// The bars whose captions are captured one by one: all but those known to magnify.
     static func barsCapturedByCaption(_ bars: [BarLayout], magnification: BarMagnification) -> [BarLayout] {
         bars.filter { !magnification.magnifies($0) }
@@ -138,7 +159,10 @@ extension MissionControlLabels {
         }
         guard outcome != .stale else { return }
         isCapturing = false
-        if outcome == .kept || outcome == .retry { captionStrips.looksChanged() }
+        if outcome == .kept || outcome == .retry {
+            captionStrips.looksChanged()
+            keepLooks(on: Set(capture.asked.map(\.screen)).subtracting(result.failed))
+        }
         guard outcome != .kept else { return }
         capturedSignature = nil
         restingSince = ProcessInfo.processInfo.systemUptime

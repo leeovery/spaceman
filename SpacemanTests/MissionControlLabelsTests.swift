@@ -2333,6 +2333,157 @@ final class MissionControlLabelsTests: XCTestCase {
         assertColor(try pixels(read.image)[10][400], barColor)
     }
 
+    // MARK: - Kept across launches
+
+    /// What a run learns of the magnified bar, on the primary display known by its UUID.
+    private func magnificationLearned() -> BarMagnification {
+        var magnification = BarMagnification()
+        magnification.know([primaryInfo])
+        _ = magnification.learn(from: magnifiedBar, read: 10, pointer: overSixth, at: 10)
+        return magnification
+    }
+
+    func testWhatIsLearnedOfABarSurvivesTheTripToDiskByDisplayUUID() throws {
+        let kept = magnificationLearned().kept
+        XCTAssertEqual(kept, ["PRIMARY|2560|16": .magnifies])
+        let stored = try XCTUnwrap(BarMagnificationStore.encode(kept))
+        XCTAssertEqual(BarMagnificationStore.decode(stored), kept)
+        let notMagnifying: [String: BarMagnification.Learned] = ["PRIMARY|2560|15": .doesNotMagnify]
+        let other = try XCTUnwrap(BarMagnificationStore.encode(notMagnifying))
+        XCTAssertEqual(BarMagnificationStore.decode(other), notMagnifying)
+    }
+
+    /// The first session after a launch: macOS captions only the hovered thumbnail from the first frame of the grow.
+    func testABarKnownToMagnifyBeforeALaunchShowsOnlyTheHoveredLabelFromItsFirstFrame() throws {
+        let stored = try XCTUnwrap(BarMagnificationStore.decode(
+            try XCTUnwrap(BarMagnificationStore.encode(magnificationLearned().kept))))
+        var launched = BarMagnification()
+        launched.know([primaryInfo])
+        XCTAssertEqual(ShownLabels.on(magnifiedBar, magnifies: launched.magnifies(magnifiedBar), pointer: overSixth),
+                       .all)
+        launched.adopt(stored)
+        XCTAssertTrue(launched.magnifies(magnifiedBar))
+        XCTAssertEqual(
+            ShownLabels.on(magnifiedBar, magnifies: launched.magnifies(magnifiedBar), pointer: overSixth).hovered, 5)
+        XCTAssertFalse(launched.magnifies(thumbnailBar(count: 15)))
+    }
+
+    func testWhatThisRunLearnedOfABarBeatsWhatWasKept() {
+        var magnification = magnificationLearned()
+        magnification.adopt(["PRIMARY|2560|16": .doesNotMagnify])
+        XCTAssertTrue(magnification.magnifies(magnifiedBar))
+    }
+
+    /// A display's ID can change from one launch to the next: a bar on a display with no known UUID is kept for the
+    /// run only.
+    func testABarOnADisplayWithNoKnownUUIDIsKeptOnlyForTheRun() {
+        var magnification = BarMagnification()
+        _ = magnification.learn(from: magnifiedBar, read: 10, pointer: overSixth, at: 10)
+        XCTAssertTrue(magnification.magnifies(magnifiedBar))
+        XCTAssertTrue(magnification.kept.isEmpty)
+    }
+
+    private var primaryLooksFile: String { CaptionLookStore.file(display: "PRIMARY", screen: primary.size) }
+
+    /// The names row's looks a run captured on the primary screen over `background`, `top` below the bar's top.
+    private func namesRowLooks(over background: String = "hills", top: CGFloat = 7.5) throws -> CaptionLooks {
+        var looks = CaptionLooks()
+        var found: [String: NativeCaptionLook] = [:]
+        for caption in mainBar.captions {
+            var made = try look(top: top)
+            made.textColor = cgColor(namesRowText)
+            made.barColor = cgColor((10, 10, 40))
+            found[CaptionLooks.keys(bar: mainBar, caption: caption).exact] = made
+        }
+        _ = looks.finish(looks.capture(of: [mainBar], attempt: 1),
+                         CaptionLooks.Result(found: found, backgrounds: [primaryKey: background]), moved: false)
+        return looks
+    }
+
+    /// The names row's looks as read back from disk after a launch.
+    private func namesRowLooksFromDisk(over background: String = "hills") throws -> [String: CaptionLooks.ScreenLooks] {
+        let kept = try XCTUnwrap(try namesRowLooks(over: background).screenLooks(primaryKey))
+        let read = try XCTUnwrap(CaptionLookStore.decode(try XCTUnwrap(CaptionLookStore.encode(kept))))
+        return [primaryLooksFile: read]
+    }
+
+    func testAScreensLooksSurviveTheTripToDiskWithTheirBackground() throws {
+        let kept = try XCTUnwrap(try namesRowLooks().screenLooks(primaryKey))
+        XCTAssertEqual(kept.entries.map(\.exact), ["Desktop 1|Mail|40", "Desktop 2|Code|40"])
+        XCTAssertEqual(kept.entries.map(\.name), ["Mail|40", "Code|40"])
+        let read = try XCTUnwrap(CaptionLookStore.decode(try XCTUnwrap(CaptionLookStore.encode(kept))))
+        XCTAssertEqual(read.background, "hills")
+        XCTAssertEqual(read.entries.map(\.exact), kept.entries.map(\.exact))
+        XCTAssertEqual(read.entries.map(\.name), kept.entries.map(\.name))
+        let look = try XCTUnwrap(read.entries.first?.look)
+        let plain = try XCTUnwrap(look.plain)
+        XCTAssertEqual(plain.top, 7.5)
+        XCTAssertEqual(plain.frame, CGRect(x: -43, y: -12.5, width: 86, height: 25))
+        XCTAssertEqual(plain.image.width, 1)
+        assertColor(try components(try XCTUnwrap(look.textColor)), namesRowText)
+        assertColor(try components(try XCTUnwrap(look.barColor)), (10, 10, 40))
+        XCTAssertNil(look.pillColor)
+        XCTAssertNil(CaptionLooks().screenLooks(primaryKey))
+    }
+
+    /// The first session after a launch: the names row's labels are drawn from their first frame, with no capture.
+    func testNamesRowCaptionsTakeTheirLooksFromDiskWithNoCapture() throws {
+        var looks = CaptionLooks()
+        XCTAssertEqual(looks.adopt(try namesRowLooksFromDisk(), screens: [primaryInfo], current: [primaryKey: "hills"]),
+                       2)
+        for caption in mainBar.captions {
+            guard case .captured(let found) = MissionControlLabels.lookSource(
+                for: caption, on: mainBar, strip: nil, leaving: nil, looks: &looks)
+            else { return XCTFail("\(caption.name) has no look") }
+            XCTAssertTrue(found.exact)
+            XCTAssertEqual(found.look.plain?.top, 7.5)
+        }
+        assertColor(try components(try XCTUnwrap(looks.measuredColors(onScreen: primaryKey, height: 146).bar)),
+                    (10, 10, 40))
+    }
+
+    /// After a wallpaper or appearance change, what was kept shows another background: the native captions show
+    /// until captured again.
+    func testLooksKeptOverAnotherBackgroundAreNotDrawn() throws {
+        var looks = CaptionLooks()
+        XCTAssertEqual(looks.adopt(try namesRowLooksFromDisk(), screens: [primaryInfo],
+                                   current: [primaryKey: "desert"]), 0)
+        guard case .awaited = MissionControlLabels.lookSource(
+            for: mail, on: mainBar, strip: nil, leaving: nil, looks: &looks)
+        else { return XCTFail("a look kept over another background drawn") }
+    }
+
+    func testLooksThisRunCapturedBeatThoseKept() throws {
+        var looks = CaptionLooks()
+        var found: [String: NativeCaptionLook] = [:]
+        found[CaptionLooks.keys(bar: mainBar, caption: mail).exact] = try look(top: 9)
+        _ = looks.finish(looks.capture(of: [bar(primary, [mail])], attempt: 1),
+                         CaptionLooks.Result(found: found, backgrounds: [primaryKey: "hills"]), moved: false)
+        XCTAssertEqual(looks.adopt(try namesRowLooksFromDisk(), screens: [primaryInfo], current: [primaryKey: "hills"]),
+                       1)
+        XCTAssertEqual(looks.look(for: mail, on: mainBar)?.look.plain?.top, 9)
+        XCTAssertEqual(looks.look(for: code, on: mainBar)?.look.plain?.top, 7.5)
+        // Captured this run over another background than those kept: none taken.
+        var repainted = try namesRowLooks(over: "desert", top: 9)
+        XCTAssertEqual(repainted.adopt(try namesRowLooksFromDisk(), screens: [primaryInfo],
+                                       current: [primaryKey: "hills"]), 0)
+    }
+
+    /// A screen's looks are kept by its display and size: wherever the display is arranged, but not at another size.
+    func testLooksAreKeptByDisplayAndScreenSize() throws {
+        let moved = ScreenInfo(frame: CGRect(x: -2560, y: 0, width: 2560, height: 1440), displayID: 7,
+                               uuid: "PRIMARY", scale: 2)
+        let movedKey = CaptionLooks.screenKey(moved.frame)
+        var looks = CaptionLooks()
+        XCTAssertEqual(looks.adopt(try namesRowLooksFromDisk(), screens: [moved], current: [movedKey: "hills"]), 2)
+        let movedBar = bar(moved.frame, [mail])
+        XCTAssertEqual(looks.look(for: mail, on: movedBar)?.exact, true)
+        let resized = ScreenInfo(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080), displayID: 1, uuid: "PRIMARY",
+                                 scale: 2)
+        var other = CaptionLooks()
+        XCTAssertEqual(other.adopt(try namesRowLooksFromDisk(), screens: [resized], current: [primaryKey: "hills"]), 0)
+    }
+
     // MARK: - Motion recording
 
     func testDrawnLabelsAreLoggedByKeyAtTheirFrames() {
@@ -2347,6 +2498,12 @@ final class MissionControlLabelsTests: XCTestCase {
 
     func testAFrameWithNoLabelsIsStillLogged() {
         XCTAssertEqual(MissionControlMotionRecorder.drawnLine([]), "ours")
+    }
+
+    /// Left out as an application, Spaceman's windows made after a film starts are left out too.
+    func testTheFilmOfMacOSAloneLeavesOutSpacemanItself() {
+        let applications: [(pid: pid_t, name: String)] = [(1, "Dock"), (getpid(), "Spaceman"), (2, "Finder")]
+        XCTAssertEqual(MissionControlMotionRecorder.spaceman(among: applications) { $0.pid }.map(\.name), ["Spaceman"])
     }
 
     func testTheFilmedBandIs150PointsUnlessAskedOtherwise() {
