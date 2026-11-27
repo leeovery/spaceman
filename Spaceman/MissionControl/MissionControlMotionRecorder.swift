@@ -68,23 +68,21 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
     /// Used only on `logQueue`.
     private var file: FileHandle?
     private var filmings: [Filming] = []
-    private var isStarting = false
-    /// How many times the recorder has been stopped, so films a start brings in after a stop are stopped too.
-    private var stops = 0
+    private var starts = FilmStarts()
 
     /// Opens the log and, filming, starts streaming if allowed to record the screen. Main thread.
     func start() {
         guard Self.isEnabled else { return }
+        starts.want()
         logQueue.async { self.openFile() }
-        guard Self.savesVideo, filmings.isEmpty, !isStarting, CGPreflightScreenCaptureAccess() else { return }
-        isStarting = true
-        let films = Self.films, stops = stops
-        Task { await startFilming(films, after: stops) }
+        guard Self.savesVideo, filmings.isEmpty, CGPreflightScreenCaptureAccess(), starts.begin() else { return }
+        let films = Self.films
+        Task { await startFilming(films) }
     }
 
     /// Main thread.
     func stop() {
-        stops += 1
+        starts.stop()
         filmings.forEach { $0.stop() }
         filmings = []
         if Self.isEnabled { note("recorder stopped") }
@@ -96,16 +94,6 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
         among applications: [Application], pid: pid_t = getpid(), processID: (Application) -> pid_t
     ) -> [Application] {
         applications.filter { processID($0) == pid }
-    }
-
-    /// Of the films `started` by a start made after the recorder's `stops`th stop, those it keeps, `now` stops having
-    /// been made by the time they came in: none once it has been stopped since, each of them then stopped by `stop`.
-    static func kept<Started>(
-        _ started: [Started], startedAfter stops: Int, now: Int, stop: (Started) -> Void
-    ) -> [Started] {
-        guard now != stops else { return started }
-        started.forEach(stop)
-        return []
     }
 
     /// Writes `text`, stamped with `time` (system uptime). Any thread.
@@ -143,9 +131,8 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
         if let data = (line + "\n").data(using: .utf8) { file?.write(data) }
     }
 
-    /// Starts each of `films` streaming the main display, for a start made after the `stops`th stop; one failing
-    /// leaves the others filming.
-    private func startFilming(_ films: [Film], after stops: Int) async {
+    /// Starts each of `films` streaming the main display; one failing leaves the others filming.
+    private func startFilming(_ films: [Film]) async {
         var started: [Filming] = []
         do {
             // Every app, not only those with windows on screen: at launch Spaceman shows none, and an app left
@@ -169,8 +156,7 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
             note("recorder failed: \(error.localizedDescription)")
         }
         await MainActor.run { [started] in
-            filmings = Self.kept(started, startedAfter: stops, now: self.stops) { $0.stop() }
-            isStarting = false
+            filmings = starts.landed(started) { $0.stop() }
         }
     }
 
@@ -208,6 +194,38 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
             self.note(prefix + "recorder stopped with error: \(error.localizedDescription)")
             self.filmings.removeAll { $0.stream === stream }
         }
+    }
+}
+
+/// The recorder's films starting: whether it is wanted on, asked to start since it was last stopped, and whether a
+/// start of its films is under way, so the films a start brings in are kept only if it is still wanted on as they land.
+struct FilmStarts {
+    private var wanted = false
+    private var starting = false
+
+    /// The recorder asked to start, filming or not.
+    mutating func want() {
+        wanted = true
+    }
+
+    /// Whether to start the films: not while a start of them is under way, whose films serve this start too.
+    mutating func begin() -> Bool {
+        guard !starting else { return false }
+        starting = true
+        return true
+    }
+
+    mutating func stop() {
+        wanted = false
+    }
+
+    /// The films `started` by the start under way, as they land: kept while the recorder is wanted on, else each
+    /// stopped by `stop`.
+    mutating func landed<Started>(_ started: [Started], stop: (Started) -> Void) -> [Started] {
+        starting = false
+        guard !wanted else { return started }
+        started.forEach(stop)
+        return []
     }
 }
 

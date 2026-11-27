@@ -2911,14 +2911,28 @@ final class MissionControlLabelsTests: XCTestCase {
 
     /// Films a start brings in after the recorder was stopped would film on, unseen, until the next launch.
     func testFilmsStartedBeforeAStopAreStoppedAsTheyComeIn() {
+        var starts = FilmStarts()
         var stopped: [String] = []
-        func kept(now: Int) -> [String] {
-            MissionControlMotionRecorder.kept(["native", "shown"], startedAfter: 2, now: now) { stopped.append($0) }
-        }
-        XCTAssertEqual(kept(now: 2), ["native", "shown"])
-        XCTAssertEqual(stopped, [])
-        XCTAssertEqual(kept(now: 3), [])
+        starts.want()
+        XCTAssertTrue(starts.begin())
+        starts.stop()
+        XCTAssertEqual(starts.landed(["native", "shown"]) { stopped.append($0) }, [])
         XCTAssertEqual(stopped, ["native", "shown"])
+    }
+
+    /// Started again while its first start was under way, the recorder was left on with no films: those the first
+    /// start brings in serve the second.
+    func testFilmsStartedBeforeAStopServeAStartMadeWhileTheyCameIn() {
+        var starts = FilmStarts()
+        var stopped: [String] = []
+        starts.want()
+        XCTAssertTrue(starts.begin())
+        starts.stop()
+        starts.want()
+        XCTAssertFalse(starts.begin())
+        XCTAssertEqual(starts.landed(["native", "shown"]) { stopped.append($0) }, ["native", "shown"])
+        XCTAssertEqual(stopped, [])
+        XCTAssertTrue(starts.begin())
     }
 
     func testTheFilmedBandIs150PointsUnlessAskedOtherwise() {

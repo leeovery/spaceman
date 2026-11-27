@@ -498,7 +498,7 @@ final class MissionControlLabels {
         clock.start()
         record(String(format: "tracking began in %.1fms", (ProcessInfo.processInfo.systemUptime - trackingStarted)
                       * 1000))
-        settleOverlayLevel(at: "tracking began", dockPID: pid, screens: screens)
+        noteWindowsOverBars(at: "tracking began", dockPID: pid, screens: screens)
         tick()
     }
 
@@ -507,7 +507,7 @@ final class MissionControlLabels {
     /// the menu bar, and the list at tracking start lacks Mission Control's windows, so applying it put the labels
     /// 30pt low and under Mission Control (filmed 2026-11-27). Skipped without the recording: the list asks the
     /// window server.
-    func settleOverlayLevel(at moment: String, dockPID: pid_t? = nil, screens: [ScreenInfo]? = nil) {
+    func noteWindowsOverBars(at moment: String, dockPID: pid_t? = nil, screens: [ScreenInfo]? = nil) {
         guard MissionControlMotionRecorder.isEnabled, let pid = dockPID ?? apps["com.apple.dock"]?.pid else { return }
         let areas = (screens ?? ScreenInfo.current()).map { screen in
             CGRect(origin: screen.frame.origin, size: CGSize(
@@ -770,7 +770,7 @@ final class MissionControlLabels {
         }
         if dock != nil, !sawBar {
             sawBar = true
-            settleOverlayLevel(at: "bar in")
+            noteWindowsOverBars(at: "bar in")
         }
         if swipe.gesture != confirmedGesture, swipe.state != .idle, dockTookSwipe(dock: dock) {
             confirmedGesture = swipe.gesture
@@ -1087,7 +1087,7 @@ final class MissionControlLabels {
                                reference: reference, from: retraction, to: 1)
         slide = close
         record(expanded ? "close expanded" : "close", at: reference)
-        settleOverlayLevel(at: "closing")
+        noteWindowsOverBars(at: "closing")
         return .slide(close)
     }
 
