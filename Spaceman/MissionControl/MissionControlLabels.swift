@@ -549,26 +549,31 @@ final class MissionControlLabels {
         record(String(format: "pointer into the bar at x %.0f", point.x), at: time)
     }
 
-    /// Replays the bar growing, just before the Dock starts it, if the pointer is still in the bar and
-    /// an earlier expansion showed where the thumbnails go: the hovered desktop's under the pointer,
-    /// or all of them in the middle when the pointer is past the names.
+    /// Replays the bar growing if the pointer is still in the bar, from as early as `growStart` allows: where the
+    /// Dock reports the thumbnails going, or failing that where an earlier expansion showed them, the hovered
+    /// desktop's under the pointer, or all of them in the middle when the pointer is past the names.
     private func startGrowIfDue(_ pending: (time: TimeInterval, bar: BarLayout), reading: DockReader.Reading,
                                 frameTime: TimeInterval) {
-        guard frameTime + clock.frameDuration >= pending.time + DockMotion.expand.delay else { return }
-        pendingGrow = nil
         let bar = pending.bar
-        guard let point = pointer?.point, bar.frame.contains(point), slide == nil else { return }
-        var to: BarLayout
-        if let reported = reading.layouts.first(where: {
+        let reported = reading.layouts.first {
             $0.screen == bar.screen && $0.frame.height > Self.expandedBarHeight
-        }) {
+        }
+        let known = expandedLayoutsByCount["\(bar.displayID)|\(bar.buttons.count)"]
+        let start = Self.growStart(at: frameTime, frameDuration: clock.frameDuration, entered: pending.time,
+                                   reported: reported != nil, known: known != nil)
+        guard start != .wait else { return }
+        pendingGrow = nil
+        guard start == .start, let point = pointer?.point, bar.frame.contains(point), slide == nil else { return }
+        var to: BarLayout
+        if let reported {
             to = reported.atRest()
-        } else {
+        } else if let layout = known {
             // Where as many thumbnails went last time: the places, not the spaces, which may since have moved.
-            guard let layout = expandedLayoutsByCount["\(bar.displayID)|\(bar.buttons.count)"] else { return }
             let hovered = bar.buttons.firstIndex { $0.frame.minX <= point.x && point.x <= $0.frame.maxX }
             let dx = hovered.map { point.x - layout.buttons[$0].frame.midX } ?? 0
             to = layout.offsetBy(dx: dx).placing(bar)
+        } else {
+            return
         }
         // The names as they are now.
         to.captions = to.captions.map { caption in
@@ -580,6 +585,25 @@ final class MissionControlLabels {
         }
         grow = (bar.screen, pending.time, bar, to)
         record("grow", at: pending.time + DockMotion.expand.delay)
+    }
+
+    enum GrowStart { case wait, start, giveUp }
+
+    /// Whether to start replaying the grow of a bar of names the pointer entered at `entered`, in the frame reaching
+    /// the screen at `frameTime`, the Dock having `reported` where the thumbnails go or an earlier expansion having
+    /// shown it (`known`). Two frames before macOS's captions start riding down, with the Dock's report, so the
+    /// labels' move is on the screen before it starts: the first frame of a ride started later has been filmed
+    /// reaching the screen a frame late, the captions already moving. Without the report, a frame later on what is
+    /// known; with neither, the report is awaited until the thumbnails start growing.
+    static func growStart(
+        at frameTime: TimeInterval, frameDuration: TimeInterval, entered: TimeInterval, reported: Bool, known: Bool
+    ) -> GrowStart {
+        let rides = entered + DockMotion.growCaptions.delay
+        guard frameTime + 2 * frameDuration >= rides else { return .wait }
+        if reported { return .start }
+        guard frameTime + frameDuration >= rides else { return .wait }
+        if known { return .start }
+        return frameTime + frameDuration < entered + DockMotion.expand.delay ? .wait : .giveUp
     }
 
     /// A replayed growth is over once it has run and the Dock reports the thumbnails, or once the

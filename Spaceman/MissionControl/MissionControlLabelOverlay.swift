@@ -37,6 +37,8 @@ struct MissionControlLabel {
     var strip: StripFace?
     var plate: LabelPlate?
     var lookOrigin: CGPoint?
+    /// How far the plate reaches past the `look` either side, in the colour given.
+    var lookPadding: (width: CGFloat, fill: CGColor)?
     /// The height of the bar the label is on: how far a retraction of 1 moves it up.
     var barHeight: CGFloat = 0
     /// The bar's thumbnails sliding sideways to where the label is placed.
@@ -349,7 +351,7 @@ private final class OverlayWindow: NSWindow {
             layer.configure(label, style: style, scale: scale)
             let size = layer.bounds.size
             // The label's top-left in AX coordinates: a matched look is placed for it; a box is centred.
-            let topLeft = label.lookOrigin
+            let topLeft = label.lookOrigin.map { CGPoint(x: $0.x - (label.lookPadding?.width ?? 0), y: $0.y) }
                 ?? CGPoint(x: label.centre.x - size.width / 2, y: label.centre.y - size.height / 2)
             // Window-local coordinates, with y up from the strip's bottom, on whole device pixels.
             let origin = CGPoint(
@@ -497,8 +499,9 @@ private final class LabelLayer: CALayer {
 
     private let text = CATextLayer()
     private var content: Content?
-    /// The matched look's image, while showing one.
+    /// The matched look's image, while showing one, and how far past it its plate reaches.
     private var lookImage: CGImage?
+    private var lookPadding: CGFloat = 0
     /// While showing a strip face, whose strip is the layer's contents: the face, and its name.
     private var stripFace: StripFace?
     private let stripName = CALayer()
@@ -563,15 +566,18 @@ private final class LabelLayer: CALayer {
         }
         if stripFace != nil { leaveStrip() }
         if let look = label.look {
-            guard look.image !== lookImage else { return }
+            let padding = label.lookPadding?.width ?? 0
+            guard look.image !== lookImage || padding != lookPadding else { return }
             lookImage = look.image
+            lookPadding = padding
             content = nil
             text.isHidden = true
-            backgroundColor = nil
+            backgroundColor = padding > 0 ? label.lookPadding?.fill : nil
             cornerRadius = 0
             contents = look.image
-            contentsGravity = .resize
-            bounds = CGRect(origin: .zero, size: look.frame.size)
+            contentsGravity = padding > 0 ? .center : .resize
+            bounds = CGRect(origin: .zero, size: CGSize(width: look.frame.width + 2 * padding,
+                                                        height: look.frame.height))
             return
         }
         if lookImage != nil {

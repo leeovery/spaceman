@@ -2097,17 +2097,61 @@ final class MissionControlLabelsTests: XCTestCase {
 
     // MARK: Riding the grow
 
-    /// macOS's captions ride the grow down from the names sooner than the thumbnails grow: measured in the films of
-    /// three expansions, they were 38% of the way at 0.1s after the pointer entered, 73% at 0.15s and there by 0.21s.
+    /// macOS's captions ride the grow down from the names sooner than the thumbnails grow. Filmed in three
+    /// expansions, their depth in points of the 112pt ride, by seconds after Spaceman saw the pointer in the bar:
+    /// the labels ride with them, to within 4.5pt.
     func testLabelsRideTheGrowAsMacOSsCaptionsDo() {
         let timing = DockMotion.growCaptions
-        for (time, progress) in [(0.088, 0.274), (0.100, 0.37), (0.121, 0.50), (0.150, 0.71), (0.167, 0.82),
-                                 (0.188, 0.89)] {
-            XCTAssertEqual(Double(timing.progress(at: time, from: 0)), progress, accuracy: 0.045, "at \(time)s")
+        let filmed: [[(TimeInterval, CGFloat)]] = [
+            [(0.050, 2), (0.067, 13), (0.084, 22), (0.100, 33), (0.117, 44), (0.134, 57), (0.150, 70), (0.167, 82),
+             (0.217, 107), (0.234, 110)],
+            [(0.034, 1), (0.050, 5), (0.067, 18), (0.084, 28), (0.100, 39), (0.117, 52), (0.134, 65), (0.150, 77),
+             (0.167, 88), (0.184, 98), (0.200, 105), (0.217, 109)],
+            [(0.050, 3), (0.067, 15), (0.084, 25), (0.100, 36), (0.117, 48), (0.134, 60), (0.150, 73), (0.167, 85),
+             (0.184, 96), (0.200, 103), (0.217, 108), (0.234, 111)],
+        ]
+        for expansion in filmed {
+            for (time, depth) in expansion {
+                XCTAssertEqual(112 * timing.progress(at: time, from: 0), depth, accuracy: 4.5, "at \(time)s")
+            }
         }
-        XCTAssertEqual(timing.end(from: 0), 0.208, accuracy: 0.001)
+        XCTAssertEqual(timing.progress(at: 0.017, from: 0), 0)
+        XCTAssertEqual(timing.end(from: 0), 0.241, accuracy: 0.001)
         // The thumbnails' timing, which the labels took before, is a quarter of the way behind at 0.1s.
         XCTAssertLessThan(Double(DockMotion.expand.progress(at: 0.100, from: 0)), 0.15)
+    }
+
+    /// The labels sat on the names for two frames as macOS's captions rode down, then jumped after them: the ride
+    /// waited for the thumbnails to start growing, and its first frame reached the screen a frame late. It starts
+    /// two frames before the captions move, with the Dock's report; without it, a frame later on an earlier
+    /// expansion's; with neither, the report is awaited until the thumbnails grow.
+    func testTheRideStartsBeforeMacOSsCaptionsMove() {
+        let frame = 1.0 / 60
+        func start(at ms: Double, reported: Bool = true, known: Bool = true) -> MissionControlLabels.GrowStart {
+            MissionControlLabels.growStart(at: 10 + ms / 1000, frameDuration: frame, entered: 10,
+                                           reported: reported, known: known)
+        }
+        let rides = DockMotion.growCaptions.delay * 1000, frameMs = frame * 1000
+        XCTAssertEqual(start(at: rides - 2 * frameMs - 1), .wait)
+        XCTAssertEqual(start(at: rides - 2 * frameMs + 0.01), .start)
+        XCTAssertEqual(start(at: rides - 2 * frameMs + 0.01, reported: false), .wait)
+        XCTAssertEqual(start(at: rides - frameMs + 0.01, reported: false), .start)
+        XCTAssertEqual(start(at: rides - frameMs + 0.01, reported: false, known: false), .wait)
+        let grows = DockMotion.expand.delay * 1000
+        XCTAssertEqual(start(at: grows - frameMs - 1, reported: false, known: false), .wait)
+        XCTAssertEqual(start(at: grows - frameMs + 0.01, reported: false, known: false), .giveUp)
+        XCTAssertEqual(start(at: grows - frameMs + 0.01, known: false), .start)
+    }
+
+    /// From one expansion to the next macOS's ride starts up to 4ms sooner or later: filmed, the captions travelling
+    /// furthest, 648 and 696pt across, came out 10.3 and 11.8pt past the labels' plates. A riding label's plate
+    /// reaches past its look by 2% of its travel either side.
+    func testARidingLabelsPlateReachesFurtherTheFurtherItTravels() {
+        XCTAssertEqual(MissionControlLabels.ridePadding(travel: 648), 13)
+        XCTAssertEqual(MissionControlLabels.ridePadding(travel: -696), 14)
+        XCTAssertGreaterThanOrEqual(MissionControlLabels.ridePadding(travel: 648), 10.3)
+        XCTAssertGreaterThanOrEqual(MissionControlLabels.ridePadding(travel: -696), 11.8)
+        XCTAssertEqual(MissionControlLabels.ridePadding(travel: 0), 0)
     }
 
     /// Every label rides down, then stays landed under its thumbnail while macOS's captions under the thumbnails
@@ -2117,8 +2161,8 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(Labels.growPhase(at: 10.1, reference: 10), .riding)
         XCTAssertEqual(Labels.growPhase(at: 10 + DockMotion.growCaptions.end(from: 0) - 0.001, reference: 10), .riding)
         XCTAssertEqual(Labels.growPhase(at: 10 + DockMotion.growCaptions.end(from: 0), reference: 10), .landed)
-        // The last frame filmed with them showing came 0.217s after the pointer entered.
-        XCTAssertEqual(Labels.growPhase(at: 10.234, reference: 10), .landed)
+        // The last frame filmed with them showing came 0.217s after the pointer entered, and they land by 0.241s.
+        XCTAssertEqual(Labels.growPhase(at: 10.245, reference: 10), .landed)
         XCTAssertEqual(Labels.growPhase(at: 10.25, reference: 10), .over)
     }
 
