@@ -134,10 +134,13 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
     private func startFilming(_ films: [Film]) async {
         var started: [Filming] = []
         do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            // Every app, not only those with windows on screen: at launch Spaceman shows none, and an app left
+            // out of the list can't be excluded.
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
             let mainID = CGMainDisplayID()
             if let display = content.displays.first(where: { $0.displayID == mainID }) {
                 let own = Self.spaceman(among: content.applications) { $0.processID }
+                note("recorder leaves out \(own.count) app\(own.count == 1 ? "" : "s") from the native film")
                 for film in films {
                     do {
                         started.append(try await startFilming(film, display: display, hiding: own))
