@@ -282,7 +282,7 @@ final class MissionControlLabels {
 
         // Switching spaces with Mission Control open moves the pill to the new space's caption, and the
         // labels, kept to the desktop they opened on, move to the new one. The new space may show another
-        // wallpaper: what the screens show is read again before Mission Control next opens.
+        // wallpaper: what the screens show is read again as soon as Mission Control is closed.
         workspaceCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -367,6 +367,8 @@ final class MissionControlLabels {
             swipe.stop()
             swipe.start()
         }
+        // Read now, while closed, so an opening before the next poll doesn't have to.
+        readBackgroundsSoon()
     }
 
     /// Logs the outcome only when it changes, to avoid flooding the log on every frame.
@@ -396,7 +398,6 @@ final class MissionControlLabels {
         guard !isTracking else { return }
         // Listening for swipes needs Accessibility, which may have been granted since launch.
         if Self.spacesBarIsInDock { swipe.start() }
-        readBackgroundsIfDue()
 
         // macOS 27+: WindowManager. macOS 26.7's WindowManager shows the Spaces Bar too, at its resting place
         // from the first moment of a swipe, so on 26 the Dock alone is followed.
@@ -434,6 +435,7 @@ final class MissionControlLabels {
             beginTracking()
         } else {
             logOutcome("Spaces Bar not found")
+            readBackgroundsIfDue()
         }
     }
 
