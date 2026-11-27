@@ -35,20 +35,23 @@ struct CaptionLooks {
     }
 
     /// What a capture brought back: looks by `Keys.exact`, the screens it failed to capture, and each
-    /// captured screen's background, by `Keys.screen`.
+    /// captured screen's background and when its shot came back (system uptime), by `Keys.screen`.
     struct Result {
         var found: [String: NativeCaptionLook] = [:]
         var failed: Set<String> = []
         var backgrounds: [String: String] = [:]
+        var taken: [String: TimeInterval] = [:]
     }
 
     enum Outcome: Equatable {
         /// From an earlier session: nothing taken.
         case stale
-        /// The bars moved while it ran: nothing taken, and the bars are captured again once at rest.
+        /// The bars moved before any of its screens was shot: nothing taken, and the bars are captured again once
+        /// at rest.
         case moved
         case kept
-        /// Kept in part: a screen failed, or a look moved a caption and waits for another capture to agree.
+        /// Kept in part: a screen failed or was shot after the bars moved, or a look moved a caption and waits for
+        /// another capture to agree.
         case retry
     }
 
@@ -161,19 +164,36 @@ struct CaptionLooks {
         })
     }
 
+    /// The screens of `result` shot after the bars began to move at `movedAt`, if they did while it ran: their
+    /// shots may have caught the bars moving. A screen shot before then caught them at rest, as a bar of names
+    /// is shot moments before the pointer enters it and the Dock grows it.
+    static func screensShotMoving(_ result: Result, movedAt: TimeInterval?) -> Set<String> {
+        guard let movedAt else { return [] }
+        return Set(result.taken.filter { $0.value > movedAt }.keys)
+    }
+
     /// Takes in what `capture` found, unless it belongs to an earlier session or the bars moved while
-    /// it ran. A caption it found no look for is spent; one on a screen it failed to capture is asked
-    /// about again, unless this was the last attempt.
+    /// it ran.
     mutating func finish(_ capture: Capture, _ result: Result, moved: Bool) -> Outcome {
+        finish(capture, result, movedOn: moved ? Set(capture.asked.map(\.screen)) : [])
+    }
+
+    /// Takes in what `capture` found, but for the screens `moved`, shot after the bars began to move, unless it
+    /// belongs to an earlier session. A caption it found no look for is spent; one on a screen it failed to capture,
+    /// or shot moving, is asked about again, unless this was the last attempt.
+    mutating func finish(_ capture: Capture, _ result: Result, movedOn moved: Set<String>) -> Outcome {
         guard capture.session == session else { return .stale }
         let lastAttempt = capture.attempt >= Self.attemptLimit
-        guard !moved else {
+        let asked = Set(capture.asked.map(\.screen))
+        guard moved.isEmpty || !asked.isSubset(of: moved) else {
             if lastAttempt { spent.formUnion(capture.asked.map(\.exact)) }
             return .moved
         }
         var retry = false
         for keys in capture.asked {
-            if result.failed.contains(keys.screen) {
+            if moved.contains(keys.screen) {
+                if lastAttempt { spent.insert(keys.exact) } else { retry = true }
+            } else if result.failed.contains(keys.screen) {
                 if lastAttempt { spent.insert(keys.exact) } else { retry = true }
             } else if let captured = result.found[keys.exact] {
                 if !take(captured, for: keys) { retry = true }
@@ -181,7 +201,9 @@ struct CaptionLooks {
                 spent.insert(keys.exact)
             }
         }
-        backgrounds.merge(result.backgrounds.filter { !result.failed.contains($0.key) }) { $1 }
+        backgrounds.merge(result.backgrounds.filter { !result.failed.contains($0.key) && !moved.contains($0.key) }) {
+            $1
+        }
         return retry ? .retry : .kept
     }
 

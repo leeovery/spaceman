@@ -95,6 +95,12 @@ struct CaptionStrip {
         return distance <= colorAgreement
     }
 
+    /// Where a label lands under the thumbnail whose middle is at `mid`, its native text's ink `inkOffset` from
+    /// its advance's middle: the middle of that ink across, and the baseline below the bar's top.
+    func landing(underThumbnailAt mid: CGFloat, inkOffset: CGFloat) -> CGPoint {
+        CGPoint(x: inkCentre(underThumbnailAt: mid, inkOffset: inkOffset), y: top + baseline)
+    }
+
     /// Where the ink of the native caption under the thumbnail whose middle is at `thumbnailMidX` sits, given how far
     /// right of the middle of its advance its ink's middle lies.
     func inkCentre(underThumbnailAt thumbnailMidX: CGFloat, inkOffset: CGFloat) -> CGFloat {

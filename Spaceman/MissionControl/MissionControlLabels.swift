@@ -132,9 +132,9 @@ final class MissionControlLabels {
     /// The bars this session last captured, and whether a capture is under way.
     var capturedSignature: String?
     var isCapturing = false
-    /// Counts frames that found the bars moving, or not fully in, so a capture can tell whether
-    /// anything moved while it ran.
-    var motionCount = 0
+    /// When a frame first found the bars moving, or not fully in, while a capture ran, if one did: screens shot
+    /// after then may have caught them moving.
+    var movedAt: TimeInterval?
     /// Captures this session by the bars' signature, so captures that never agree stop retrying.
     var captureAttempts: [String: Int] = [:]
     /// Magnifying bars' caption strips, which their labels are drawn from, whether a capture of one is under way, and

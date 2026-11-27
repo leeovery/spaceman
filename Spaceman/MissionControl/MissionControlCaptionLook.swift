@@ -31,6 +31,8 @@ struct NativeCaptionLook {
         /// Dock's caption positions can be a few points out while the bar settles; this is not.
         let top: CGFloat
         let image: CGImage
+        /// How far below the image's top the name's baseline is, in points.
+        let baseline: CGFloat
     }
 
     let plain: Variant?
@@ -184,7 +186,9 @@ enum MissionControlCaptionLook {
     // MARK: - Capture
 
     /// A capture's looks by caption key, and, while the motion recording is on, its report.
-    typealias Captured = (looks: [String: NativeCaptionLook], report: CaptureReport?)
+    /// A screen's captions matched: their looks, the report for the recorder, and when the shot came back (system
+    /// uptime), if one was taken.
+    typealias Captured = (looks: [String: NativeCaptionLook], report: CaptureReport?, taken: TimeInterval?)
 
     /// Captures the band of the screen holding `captions`, leaving out Spaceman's own windows, and
     /// matches each caption. Nil when the capture fails, as it does without Screen Recording.
@@ -193,7 +197,7 @@ enum MissionControlCaptionLook {
         screen: CGRect,
         captions: [CaptionToMatch]
     ) async -> Captured? {
-        guard let sourceRect = region(of: captions, on: screen) else { return ([:], nil) }
+        guard let sourceRect = region(of: captions, on: screen) else { return ([:], nil, nil) }
         let started = ProcessInfo.processInfo.systemUptime
         guard let shot = await shoot(displayID: displayID, screen: screen, sourceRect: sourceRect) else { return nil }
         let matched = matches(in: shot.image, origin: shot.origin, scale: shot.scale, captions: captions)
@@ -215,7 +219,7 @@ enum MissionControlCaptionLook {
             ? CaptureReport(displayID: displayID, asked: shot.asked, taken: shot.taken, captions: captions,
                             matches: matched)
             : nil
-        return (found, report)
+        return (found, report, shot.taken)
     }
 
     /// What a capture of a magnifying bar's caption row brought back: its strip, or why the hovered caption in it
@@ -841,7 +845,8 @@ enum MissionControlCaptionLook {
             width: CGFloat(image.width) / scale,
             height: CGFloat(image.height) / scale)
         return NativeCaptionLook.Variant(
-            frame: frame, top: origin.y + CGFloat(boxTop) / scale - caption.barTop, image: image)
+            frame: frame, top: origin.y + CGFloat(boxTop) / scale - caption.barTop, image: image,
+            baseline: CGFloat(found.baseline - boxTop) / scale)
     }
 
     /// The bar's colour on `row` across `columns`: the median of its pixels, leaving out text.

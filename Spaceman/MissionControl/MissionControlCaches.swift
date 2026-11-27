@@ -73,13 +73,14 @@ enum CacheFiles {
 enum CaptionLookStore {
 
     private static let folder = "CaptionLooks"
-    private static let version = 1
+    private static let version = 2
 
     /// A look as written: its images as PNG, its colours as sRGB components.
     private struct Stored: Codable {
         struct Variant: Codable {
             let frame: CGRect
             let top: CGFloat
+            let baseline: CGFloat
             let png: Data
         }
 
@@ -119,7 +120,7 @@ enum CaptionLookStore {
         func variant(_ variant: NativeCaptionLook.Variant?) -> Stored.Variant? {
             variant.flatMap { variant in
                 CacheFiles.png(of: variant.image).map {
-                    Stored.Variant(frame: variant.frame, top: variant.top, png: $0)
+                    Stored.Variant(frame: variant.frame, top: variant.top, baseline: variant.baseline, png: $0)
                 }
             }
         }
@@ -139,7 +140,8 @@ enum CaptionLookStore {
         func variant(_ variant: Stored.Variant?) -> NativeCaptionLook.Variant? {
             variant.flatMap { variant in
                 CacheFiles.image(png: variant.png).map {
-                    NativeCaptionLook.Variant(frame: variant.frame, top: variant.top, image: $0)
+                    NativeCaptionLook.Variant(frame: variant.frame, top: variant.top, image: $0,
+                                              baseline: variant.baseline)
                 }
             }
         }

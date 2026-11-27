@@ -61,8 +61,8 @@ extension MissionControlLabels {
     /// Notes that the bars moved, or may have: a capture under way may have caught them moving, and the
     /// next waits for them to rest again.
     func noteMotion() {
-        motionCount &+= 1
         restingSignature = nil
+        if isCapturing, movedAt == nil { movedAt = ProcessInfo.processInfo.systemUptime }
     }
 
     /// Once the bars have rested, fully in and unchanged, for a moment, captures them to match the
@@ -90,7 +90,7 @@ extension MissionControlLabels {
         capturedSignature = signature
         captureAttempts[signature] = attempts + 1
         isCapturing = true
-        let motion = motionCount
+        movedAt = nil
         let capture = captionLooks.capture(of: bars, attempt: attempts + 1)
         let captured = Set(bars.map { CaptionLooks.screenKey($0.screen) })
         let backgrounds = CaptionLooks.currentBackgrounds().filter { captured.contains($0.key) }
@@ -106,19 +106,21 @@ extension MissionControlLabels {
         let owner = WeakOwner(self)
         Task.detached(priority: .userInitiated) {
             var result = CaptionLooks.Result(backgrounds: backgrounds)
-            var reports: [CaptureReport] = []
+            var reports: [(screen: String, report: CaptureReport)] = []
             for job in jobs {
+                let screen = CaptionLooks.screenKey(job.screen)
                 guard let captured = await MissionControlCaptionLook.capture(
                     displayID: job.displayID, screen: job.screen, captions: job.captions)
                 else {
-                    result.failed.insert(CaptionLooks.screenKey(job.screen))
+                    result.failed.insert(screen)
                     continue
                 }
                 result.found.merge(captured.looks) { $1 }
-                if let report = captured.report { reports.append(report) }
+                result.taken[screen] = captured.taken
+                if let report = captured.report { reports.append((screen, report)) }
             }
             DispatchQueue.main.async {
-                owner.labels?.finishCapture(capture, result, motion: motion, reports: reports)
+                owner.labels?.finishCapture(capture, result, reports: reports)
             }
         }
     }
@@ -137,6 +139,7 @@ extension MissionControlLabels {
     func adoptLooks(_ stored: [String: CaptionLooks.ScreenLooks]) {
         let taken = captionLooks.adopt(
             stored, screens: ScreenInfo.current(), current: CaptionLooks.currentBackgrounds())
+        record("caption looks kept from before: \(taken) taken")
         guard taken > 0 else { return }
         captionStrips.looksChanged()
         Self.log.log("Took \(taken) caption looks kept from before")
@@ -147,21 +150,24 @@ extension MissionControlLabels {
         bars.filter { !magnification.magnifies($0) }
     }
 
-    /// Keeps a capture's looks, unless it is from an earlier session or the bars moved while it ran. The
-    /// bars are captured again after another rest when it moved or failed to capture a caption.
+    /// Keeps a capture's looks, unless it is from an earlier session, but for the screens shot after the bars
+    /// began to move. The bars are captured again after another rest when a screen was shot moving or failed, or a
+    /// caption wasn't matched.
     fileprivate func finishCapture(
-        _ capture: CaptionLooks.Capture, _ result: CaptionLooks.Result, motion: Int, reports: [CaptureReport]
+        _ capture: CaptionLooks.Capture, _ result: CaptionLooks.Result,
+        reports: [(screen: String, report: CaptureReport)]
     ) {
-        let moved = motion != motionCount
-        let outcome = captionLooks.finish(capture, result, moved: moved)
-        for report in reports {
-            record(report.line(attempt: capture.attempt, outcome: outcome, moved: moved), at: report.taken)
+        let moved = CaptionLooks.screensShotMoving(result, movedAt: movedAt)
+        let outcome = captionLooks.finish(capture, result, movedOn: moved)
+        for (screen, report) in reports {
+            record(report.line(attempt: capture.attempt, outcome: outcome, moved: moved.contains(screen)),
+                   at: report.taken)
         }
         guard outcome != .stale else { return }
         isCapturing = false
         if outcome == .kept || outcome == .retry {
             captionStrips.looksChanged()
-            keepLooks(on: Set(capture.asked.map(\.screen)).subtracting(result.failed))
+            keepLooks(on: Set(capture.asked.map(\.screen)).subtracting(result.failed).subtracting(moved))
         }
         guard outcome != .kept else { return }
         capturedSignature = nil

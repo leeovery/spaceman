@@ -65,6 +65,10 @@ enum DockMotion {
     /// 26.7 to three expansions, filmed: to within 2% of the travel, each starting 86-98ms after the
     /// pointer entered. Once, with the Dock still making its thumbnails, it started about 0.5s after.
     static let expand = Timing(delay: 0.092, duration: 0.200, curve: CubicBezier(0.1, 0.4, 0.6, 1.05))
+    /// The captions riding that grow on a magnifying bar, from the names down to under the thumbnails, timed the
+    /// same way: they start sooner and land sooner than the thumbnails finish. Fitted on macOS 26.7 to three
+    /// expansions with 16 desktops in two sessions, filmed: to within 4.3% of the travel, along and down alike.
+    static let growCaptions = Timing(delay: 0.050, duration: 0.158, curve: CubicBezier(0.4, 0.4, 0.9, 1.0))
     /// A desktop added in Mission Control: the thumbnails narrow and glide to make room, timed from the
     /// window server's "Mission Control began", which it sends for this too. Fitted on macOS 26.7 to
     /// two additions, filmed: to within 1% of the travel, both starting 23ms after the event.

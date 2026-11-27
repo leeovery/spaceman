@@ -401,7 +401,7 @@ final class MissionControlLabelsTests: XCTestCase {
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         let image = try XCTUnwrap(context.makeImage())
         let variant = NativeCaptionLook.Variant(
-            frame: CGRect(x: -43, y: top - 20, width: 86, height: 25), top: top, image: image)
+            frame: CGRect(x: -43, y: top - 20, width: 86, height: 25), top: top, image: image, baseline: 17.5)
         return NativeCaptionLook(plain: variant, current: variant, wasCurrent: false, summary: "")
     }
 
@@ -510,6 +510,34 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(looks.backgrounds, [:])
         XCTAssertNil(looks.look(for: mail, on: mainBar))
         XCTAssertTrue(looks.lookMayArrive(for: code, on: mainBar))
+    }
+
+    /// The bar of names is shot moments before the pointer enters it and the Dock grows it: the bars move while the
+    /// capture goes on to the next screen. Every names-row capture of the run filmed came to nothing that way, so
+    /// none was ever kept on disk, and the first session after a launch showed macOS's captions.
+    func testOnlyScreensShotAfterTheBarsBeganToMoveAreCaughtMoving() {
+        let result = CaptionLooks.Result(taken: [primaryKey: 10.0, builtInKey: 10.2])
+        XCTAssertEqual(CaptionLooks.screensShotMoving(result, movedAt: 10.1), [builtInKey])
+        XCTAssertEqual(CaptionLooks.screensShotMoving(result, movedAt: 9.9), [primaryKey, builtInKey])
+        XCTAssertEqual(CaptionLooks.screensShotMoving(result, movedAt: nil), [])
+    }
+
+    func testAScreenShotBeforeTheBarsMovedIsKeptAndTheOtherAskedAboutAgain() throws {
+        var looks = CaptionLooks()
+        let capture = looks.capture(of: [mainBar, builtInBar], attempt: 1)
+        var found = try found([mail, code], on: mainBar)
+        found.merge(try self.found([caption(1, "Notes")], on: builtInBar)) { $1 }
+        let result = CaptionLooks.Result(found: found, backgrounds: [primaryKey: "hills", builtInKey: "sea"])
+        XCTAssertEqual(looks.finish(capture, result, movedOn: [builtInKey]), .retry)
+        XCTAssertNotNil(looks.look(for: mail, on: mainBar))
+        XCTAssertNil(looks.look(for: caption(1, "Notes"), on: builtInBar))
+        XCTAssertTrue(looks.lookMayArrive(for: caption(1, "Notes"), on: builtInBar))
+        XCTAssertEqual(looks.backgrounds, [primaryKey: "hills"])
+        XCTAssertNotNil(looks.screenLooks(primaryKey))
+        XCTAssertNil(looks.screenLooks(builtInKey))
+        var again = CaptionLooks()
+        XCTAssertEqual(again.finish(again.capture(of: [mainBar, builtInBar], attempt: 1), result,
+                                    movedOn: [primaryKey, builtInKey]), .moved)
     }
 
     func testTheLastAttemptTheBarsMovedUnderSpendsEveryCaption() {
@@ -1954,8 +1982,8 @@ final class MissionControlLabelsTests: XCTestCase {
         }
     }
 
-    /// Labels riding the grow from the names wear the names row's looks until their captions fade. Looks are kept by
-    /// bar height: none is ever captured at a magnifying bar's, so looked for there they never come.
+    /// Labels riding the grow from the names wear the names row's looks until they land. Looks are kept by bar
+    /// height: none is ever captured at a magnifying bar's, so looked for there they never come.
     func testALabelRidingTheGrowOntoAMagnifyingBarWearsItsNamesRowLook() throws {
         let names = thumbnailBar(height: 40)
         var looks = CaptionLooks()
@@ -1968,13 +1996,61 @@ final class MissionControlLabelsTests: XCTestCase {
             for (caption, leaving) in zip(magnifiedBar.captions, names.captions) {
                 let source = MissionControlLabels.lookSource(
                     for: caption, on: magnifiedBar, strip: drawing, leaving: (names, leaving), looks: &looks)
-                guard case .riding(let worn, let drop) = source
+                guard case .riding(let worn, let from, let onto) = source
                 else { return XCTFail("\(caption.covers) riding the grow drawn as \(source)") }
                 XCTAssertTrue(worn.exact)
                 XCTAssertEqual(worn.look.plain?.top, 7.5)
-                XCTAssertEqual(drop, caption.centre.y - leaving.centre.y)
+                XCTAssertEqual(from, leaving.centre)
+                XCTAssertTrue(onto?.image === kept?.image)
             }
         }
+    }
+
+    // MARK: Riding the grow
+
+    /// macOS's captions ride the grow down from the names sooner than the thumbnails grow: measured in the films of
+    /// three expansions, they were 38% of the way at 0.1s after the pointer entered, 73% at 0.15s and there by 0.21s.
+    func testLabelsRideTheGrowAsMacOSsCaptionsDo() {
+        let timing = DockMotion.growCaptions
+        for (time, progress) in [(0.088, 0.274), (0.100, 0.37), (0.121, 0.50), (0.150, 0.71), (0.167, 0.82),
+                                 (0.188, 0.89)] {
+            XCTAssertEqual(Double(timing.progress(at: time, from: 0)), progress, accuracy: 0.045, "at \(time)s")
+        }
+        XCTAssertEqual(timing.end(from: 0), 0.208, accuracy: 0.001)
+        // The thumbnails' timing, which the labels took before, is a quarter of the way behind at 0.1s.
+        XCTAssertLessThan(Double(DockMotion.expand.progress(at: 0.100, from: 0)), 0.15)
+    }
+
+    /// Every label rides down, then stays landed under its thumbnail while macOS's captions under the thumbnails
+    /// not hovered are there; then only the hovered one's is drawn.
+    func testEveryLabelStaysThroughTheGrowUntilMacOSsOtherCaptionsHaveGone() {
+        typealias Labels = MissionControlLabels
+        XCTAssertEqual(Labels.growPhase(at: 10.1, reference: 10), .riding)
+        XCTAssertEqual(Labels.growPhase(at: 10 + DockMotion.growCaptions.end(from: 0) - 0.001, reference: 10), .riding)
+        XCTAssertEqual(Labels.growPhase(at: 10 + DockMotion.growCaptions.end(from: 0), reference: 10), .landed)
+        // The last frame filmed with them showing came 0.217s after the pointer entered.
+        XCTAssertEqual(Labels.growPhase(at: 10.234, reference: 10), .landed)
+        XCTAssertEqual(Labels.growPhase(at: 10.25, reference: 10), .over)
+    }
+
+    /// A label riding the grow in its names row look starts where that caption was, and lands with its name where
+    /// the strip draws it, so it never jumps as it turns into the strip's label.
+    func testARidingLabelStartsOverItsCaptionOnTheNamesAndLandsWhereTheStripDrawsIt() throws {
+        let look = try XCTUnwrap(try look(top: 7.5).plain)
+        let leaving = CGPoint(x: 511, y: 20)
+        XCTAssertEqual(MissionControlLabels.rideStart(of: look, leaving: leaving, barTop: 0), CGPoint(x: 468, y: 7.5))
+        let strip = try strip()
+        let landing = strip.landing(underThumbnailAt: 229, inkOffset: 0.4)
+        XCTAssertEqual(landing, CGPoint(x: 229 + 0.5 + 0.4, y: 116 + 18))
+        let end = MissionControlLabels.rideEnd(
+            of: look, leaving: leaving, centre: CGPoint(x: 229, y: 95), landing: landing, barTop: 0)
+        // Its name's ink middle, the image's middle, on the native ink's; its baseline on the native baseline.
+        XCTAssertEqual(end.x + look.frame.width / 2, landing.x, accuracy: 0.001)
+        XCTAssertEqual(end.y + look.baseline, landing.y, accuracy: 0.001)
+        // With no strip, as far from where it started as the Dock's captions are apart.
+        let unstripped = MissionControlLabels.rideEnd(
+            of: look, leaving: leaving, centre: CGPoint(x: 229, y: 95), landing: nil, barTop: 0)
+        XCTAssertEqual(unstripped, CGPoint(x: 229 - 43, y: 7.5 + 75))
     }
 
     /// With no names row look to wear, a label riding the grow is drawn as the magnifying bar's labels are.
