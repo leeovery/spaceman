@@ -14,16 +14,13 @@ import AppKit
 /// it only once another agrees, and only a strip two captures agree on is written to disk.
 struct CaptionStrips {
 
-    /// A capture under way: its session, the strip it is for, the thumbnail hovered, the current space's or not, and
-    /// its frame; whether it only seeks the pill of a strip already captured; and how many times the hovered thumbnail
-    /// had changed when it started.
+    /// A capture under way: its session, the strip it is for, the thumbnail hovered and its frame, and how many times
+    /// the hovered thumbnail had changed when it started.
     struct Capture {
         let session: Int
         let key: String
         let place: Int
-        let current: Bool
         let thumbnail: CGRect
-        let seeksPill: Bool
         let hoverChanges: Int
     }
 
@@ -84,7 +81,7 @@ struct CaptionStrips {
         var waited: TimeInterval = 0
     }
 
-    /// What one kind of capture of a strip has spent this session: captures that failed or missed, and those held.
+    /// What a strip's captures have spent this session: those that failed or missed, and those held.
     private struct Budget {
         var spent = 0
         var held = 0
@@ -106,15 +103,13 @@ struct CaptionStrips {
     private var waiting: [String: CaptionStrip] = [:]
     /// What captures last saw of each strip's caption, and the background they saw it over, kept for the run.
     private var sightings: [String: (seen: CaptionSighting, background: String)] = [:]
-    /// This session's strips agreed on, and those captured with the current space's thumbnail hovered.
+    /// This session's strips agreed on.
     private var captured: Set<String> = []
-    private var capturedInPill: Set<String> = []
-    private var stripBudgets: [String: Budget] = [:]
-    private var pillBudgets: [String: Budget] = [:]
+    private var budgets: [String: Budget] = [:]
     private var retryAt: [String: TimeInterval] = [:]
     private var hovers: [String: Hover] = [:]
     /// Each strip's style and fallback, worked out once until its strip, its sighting or the looks change.
-    private var dressing: [String: (style: CaptionStrip.Style, fallback: StripFallback?)] = [:]
+    private var dressing: [String: (style: CaptionStrip.TextStyle, fallback: StripFallback?)] = [:]
 
     mutating func beginSession(backgrounds: [String: String], screens: [ScreenInfo]) {
         session += 1
@@ -125,9 +120,7 @@ struct CaptionStrips {
         drawable = [:]
         waiting = [:]
         captured = []
-        capturedInPill = []
-        stripBudgets = [:]
-        pillBudgets = [:]
+        budgets = [:]
         retryAt = [:]
         hovers = [:]
         dressing = [:]
@@ -211,27 +204,17 @@ struct CaptionStrips {
                              baseline: seen?.baseline, lineOffset: seen?.lineOffset ?? 0, scale: scale)
     }
 
-    /// The capture due of the strip `key`, with the thumbnail at `place`, whose frame is `thumbnail`, hovered,
-    /// `current` if it is the current space's, at `time`, all steady since `steadySince`: until two captures agree,
-    /// or one to measure the pill the strip lacks. Only once the hover and the rest have settled, `retryDelay` after a
-    /// capture that wasn't kept, and while that kind of capture has budget left.
+    /// The capture due of the strip `key`, with the thumbnail at `place`, whose frame is `thumbnail`, hovered at
+    /// `time`, all steady since `steadySince`: until two captures agree. Only once the hover and the rest have
+    /// settled, `retryDelay` after a capture that wasn't kept, and while its budget lasts.
     func capture(
-        key: String, hovered place: Int, current: Bool, thumbnail: CGRect, at time: TimeInterval,
-        steadySince: TimeInterval
+        key: String, hovered place: Int, thumbnail: CGRect, at time: TimeInterval, steadySince: TimeInterval
     ) -> Capture? {
-        guard backgroundOf[key] != nil, time >= retryAt[key, default: 0], let hover = hovers[key],
-              hover.place == place, time - hover.since >= Self.settle, time - steadySince >= Self.settle
+        guard backgroundOf[key] != nil, !captured.contains(key), budgets[key, default: Budget()].isLeft,
+              time >= retryAt[key, default: 0], let hover = hovers[key], hover.place == place,
+              time - hover.since >= Self.settle, time - steadySince >= Self.settle
         else { return nil }
-        let seeksPill = captured.contains(key)
-        if seeksPill {
-            guard current, drawable[key]?.pill == nil, !capturedInPill.contains(key),
-                  pillBudgets[key, default: Budget()].isLeft
-            else { return nil }
-        } else {
-            guard stripBudgets[key, default: Budget()].isLeft else { return nil }
-        }
-        return Capture(session: session, key: key, place: place, current: current, thumbnail: thumbnail,
-                       seeksPill: seeksPill, hoverChanges: hover.changes)
+        return Capture(session: session, key: key, place: place, thumbnail: thumbnail, hoverChanges: hover.changes)
     }
 
     /// Takes in what `capture` brought back at `time`, nil when the screen couldn't be captured, unless it belongs
@@ -278,18 +261,16 @@ struct CaptionStrips {
     /// Whether a strip may yet arrive for `key` in time to wait for it: while its screen's background is known, its
     /// captures haven't all failed or missed, and its bar hasn't been hovered for `hoverWait` with none.
     private func mayArrive(_ key: String) -> Bool {
-        backgroundOf[key] != nil && stripBudgets[key, default: Budget()].spent < Self.attemptLimit
+        backgroundOf[key] != nil && budgets[key, default: Budget()].spent < Self.attemptLimit
             && (hovers[key]?.waited ?? 0) < Self.hoverWait
     }
 
     private mutating func spend(_ outcome: Outcome, of capture: Capture) {
-        var budget = (capture.seeksPill ? pillBudgets : stripBudgets)[capture.key, default: Budget()]
         switch outcome {
-        case .failed, .missed: budget.spent += 1
-        case .held: budget.held += 1
+        case .failed, .missed: budgets[capture.key, default: Budget()].spent += 1
+        case .held: budgets[capture.key, default: Budget()].held += 1
         case .stale, .moved, .drawn, .kept: return
         }
-        if capture.seeksPill { pillBudgets[capture.key] = budget } else { stripBudgets[capture.key] = budget }
     }
 
     private mutating func noteHover(of key: String, place: Int?, at time: TimeInterval) {
@@ -306,7 +287,7 @@ struct CaptionStrips {
 
     /// Draws `strip`, unless it measures the captions otherwise than the strip drawn and no capture held before
     /// agrees with it. It is agreed on, and kept, once it agrees with the strip drawn or the one held; with no strip
-    /// drawn it is only drawn, until another capture agrees. A strip that measured no pill keeps the one it replaces.
+    /// drawn it is only drawn, until another capture agrees.
     private mutating func take(_ strip: CaptionStrip, for capture: Capture) -> Outcome {
         let key = capture.key
         let drawn = drawable[key]
@@ -315,11 +296,9 @@ struct CaptionStrips {
             return .held
         }
         waiting[key] = nil
-        let accepted = strip.keepingPill(of: kept[key])
-        kept[key] = accepted
-        drawable[key] = accepted
+        kept[key] = strip
+        drawable[key] = strip
         dressing[key] = nil
-        if capture.current { capturedInPill.insert(key) }
         guard drawn != nil else { return .drawn }
         captured.insert(key)
         return .kept
@@ -331,7 +310,7 @@ struct CaptionStrips {
 struct StripDrawing {
     let key: String?
     let strip: CaptionStrip?
-    let style: CaptionStrip.Style
+    let style: CaptionStrip.TextStyle
     let fallback: StripFallback?
     let awaited: Bool
 }
@@ -345,14 +324,8 @@ enum CaptionStripStore {
     private static let version = 2
 
     /// A strip as written: the image as PNG, with what was measured. Colours are components in the image's space.
+    /// Files written before pills were left off magnifying bars carry one too, which goes unread.
     private struct Stored: Codable {
-        struct Pill: Codable {
-            let padding: CGFloat
-            let above: CGFloat
-            let below: CGFloat
-            let color: [CGFloat]
-        }
-
         let version: Int
         let png: Data
         let scale: CGFloat
@@ -361,7 +334,6 @@ enum CaptionStripStore {
         let lineOffset: CGFloat
         let fontSize: CGFloat
         let textColor: [CGFloat]
-        let pill: Pill?
         let background: String
     }
 
@@ -380,14 +352,9 @@ enum CaptionStripStore {
         guard let space, let png = CacheFiles.png(of: strip.image),
               let textColor = components(of: strip.text.color, in: space)
         else { return nil }
-        let pill = strip.pill.flatMap { pill in
-            components(of: pill.color, in: space).map {
-                Stored.Pill(padding: pill.padding, above: pill.above, below: pill.below, color: $0)
-            }
-        }
         let stored = Stored(
             version: version, png: png, scale: strip.scale, top: strip.top, baseline: strip.baseline,
-            lineOffset: strip.lineOffset, fontSize: strip.text.fontSize, textColor: textColor, pill: pill,
+            lineOffset: strip.lineOffset, fontSize: strip.text.fontSize, textColor: textColor,
             background: strip.background)
         return try? PropertyListEncoder().encode(stored)
     }
@@ -398,15 +365,10 @@ enum CaptionStripStore {
               let space = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
               let textColor = color(stored.textColor, in: space)
         else { return nil }
-        let pill = stored.pill.flatMap { pill in
-            color(pill.color, in: space).map {
-                CaptionStrip.PillStyle(padding: pill.padding, above: pill.above, below: pill.below, color: $0)
-            }
-        }
         return CaptionStrip(
             image: image, scale: stored.scale, top: stored.top, baseline: stored.baseline,
             lineOffset: stored.lineOffset, text: CaptionStrip.TextStyle(fontSize: stored.fontSize, color: textColor),
-            pill: pill, background: stored.background)
+            background: stored.background)
     }
 
     private static func components(of color: CGColor, in space: CGColorSpace) -> [CGFloat]? {

@@ -111,11 +111,9 @@ struct CaptionLooks {
         return byName[keys.name].map { ($0, false) }
     }
 
-    /// A caption's text colour, the current space's pill colour and the bar's colour, each nil where none was
-    /// measured.
+    /// A caption's text colour and the bar's colour, each nil where none was measured.
     struct Colors {
         var text: CGColor?
-        var pill: CGColor?
         var bar: CGColor?
     }
 
@@ -128,7 +126,7 @@ struct CaptionLooks {
         func first(_ color: (NativeCaptionLook) -> CGColor?) -> CGColor? {
             atHeight.lazy.compactMap(color).first ?? anyHeight.lazy.compactMap(color).first
         }
-        return Colors(text: first { $0.textColor }, pill: first { $0.pillColor }, bar: first { $0.barColor })
+        return Colors(text: first { $0.textColor }, bar: first { $0.barColor })
     }
 
     /// Whether a look may yet be captured for a caption that has none: not once a capture has found

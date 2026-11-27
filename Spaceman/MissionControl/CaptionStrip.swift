@@ -11,27 +11,13 @@ import CoreText
 /// A magnifying bar's caption row, captured across its screen's width with its one native caption erased. macOS
 /// captions only the hovered thumbnail there, at the same depth whatever the thumbnail's size, and the bar's
 /// background stays put as the thumbnails resize: any thumbnail's label is the strip cropped where the label sits,
-/// with its name over it.
+/// with its name over it. macOS draws no pill there, the current space's caption included: its thumbnail's border
+/// marks it (filmed on macOS 26.7).
 struct CaptionStrip {
 
     struct TextStyle: Hashable {
         let fontSize: CGFloat
         let color: CGColor
-    }
-
-    /// The current space's pill, in points: how far it reaches beyond the text's ink on its wider side, and above
-    /// and below the baseline.
-    struct PillStyle: Hashable {
-        let padding: CGFloat
-        let above: CGFloat
-        let below: CGFloat
-        let color: CGColor
-    }
-
-    /// How a magnifying bar's labels are drawn: their text, and the current space's pill, if its colour is known.
-    struct Style: Hashable {
-        let text: TextStyle
-        let pill: PillStyle?
     }
 
     /// The bar, its left edge the screen's, at `scale` pixels to the point.
@@ -42,9 +28,8 @@ struct CaptionStrip {
     let baseline: CGFloat
     /// How far right of its thumbnail's middle macOS centres a caption's line of text, in points.
     let lineOffset: CGFloat
-    /// The text of the caption erased from it, and its pill, if it was the current space's.
+    /// The text of the caption erased from it.
     let text: TextStyle
-    let pill: PillStyle?
     /// What its screen showed behind the bar when it was captured, as `CaptionLooks.currentBackgrounds()` says.
     let background: String
 
@@ -60,13 +45,6 @@ struct CaptionStrip {
         "\(display)-\(Int(screen.width.rounded()))x\(Int(screen.height.rounded()))-\(Int(barHeight.rounded()))"
     }
 
-    /// This strip, taking `older`'s pill where it measured none and `older` was captured over the same background.
-    func keepingPill(of older: CaptionStrip?) -> CaptionStrip {
-        guard pill == nil, let older, older.background == background, let kept = older.pill else { return self }
-        return CaptionStrip(image: image, scale: scale, top: top, baseline: baseline, lineOffset: lineOffset,
-                            text: text, pill: kept, background: background)
-    }
-
     /// How far apart, 0-255 in sRGB, two captures' colours may be and still agree, their text sizes in points, and
     /// where they have macOS centre a caption, in points.
     static let colorAgreement: CGFloat = 10
@@ -74,15 +52,12 @@ struct CaptionStrip {
     static let lineAgreement: CGFloat = 1
 
     /// Whether `other` measured the captions as this did: text of the same size and colour, centred as far off its
-    /// thumbnail's middle, and pills of the same colour where both measured one. A capture taken as a caption faded in
-    /// or out measures them dimmer; one taken as the thumbnails moved puts them off centre.
+    /// thumbnail's middle. A capture taken as a caption faded in or out measures them dimmer; one taken as the
+    /// thumbnails moved puts them off centre.
     func agrees(with other: CaptionStrip) -> Bool {
-        guard abs(text.fontSize - other.text.fontSize) <= Self.sizeAgreement,
-              abs(lineOffset - other.lineOffset) <= Self.lineAgreement,
-              Self.colorsAgree(text.color, other.text.color)
-        else { return false }
-        guard let pill, let otherPill = other.pill else { return true }
-        return Self.colorsAgree(pill.color, otherPill.color)
+        abs(text.fontSize - other.text.fontSize) <= Self.sizeAgreement
+            && abs(lineOffset - other.lineOffset) <= Self.lineAgreement
+            && Self.colorsAgree(text.color, other.text.color)
     }
 
     private static func colorsAgree(_ first: CGColor, _ second: CGColor) -> Bool {
@@ -107,17 +82,11 @@ struct CaptionStrip {
         thumbnailMidX + lineOffset + inkOffset
     }
 
-    /// How labels are drawn from `strip`: in its caption's text, or until a caption has been measured, the native
-    /// caption's 14pt in the text colour `measured` on the screen, white where none was. The current space's pill is
-    /// the strip's, or else the native pill in the pill colour `measured` on the screen; none if neither is known.
-    static func style(of strip: CaptionStrip?, measured: CaptionLooks.Colors) -> Style {
-        let text = strip?.text ?? TextStyle(
+    /// The text labels are drawn from `strip` in: its caption's, or until a caption has been measured, the native
+    /// caption's 14pt in the text colour `measured` on the screen, white where none was.
+    static func style(of strip: CaptionStrip?, measured: CaptionLooks.Colors) -> TextStyle {
+        strip?.text ?? TextStyle(
             fontSize: MissionControlCaptionLook.nativeFontSize, color: measured.text ?? unmeasuredText)
-        let pill = strip?.pill ?? measured.pill.map {
-            PillStyle(padding: MissionControlCaptionLook.pillPadding, above: MissionControlCaptionLook.bandAbove,
-                      below: MissionControlCaptionLook.bandBelow, color: $0)
-        }
-        return Style(text: text, pill: pill)
     }
 
     /// Where a label `width` points wide, centred on `centreX`, goes on a screen whose left edge is at `screenLeft`,
@@ -131,25 +100,17 @@ struct CaptionStrip {
     }
 
     /// A label drawn from this strip, centred on the native caption's ink: as tall as the strip and wide enough to hide
-    /// that caption, `coversWidth` of ink, in its pill with 2 pixels more either side, and to hold `name`; with the
-    /// name on the captions' baseline and, for the current space, a pill half a pixel larger all round than the native
-    /// one would be.
-    func layout(name: NameImage, coversWidth: CGFloat, style: Style, current: Bool) -> StripFace.Layout {
+    /// that caption, `coversWidth` of ink, as a pill would hold it with 2 pixels more either side, and to hold `name`;
+    /// with the name on the captions' baseline.
+    func layout(name: NameImage, coversWidth: CGFloat) -> StripFace.Layout {
         let pixel = 1 / scale
         func snapped(_ points: CGFloat) -> CGFloat { (points * scale).rounded() / scale }
-        let padding = style.pill?.padding ?? MissionControlCaptionLook.pillPadding
-        let content = max(name.inkWidth, coversWidth) + 2 * padding
+        let content = max(name.inkWidth, coversWidth) + 2 * MissionControlCaptionLook.pillPadding
         let width = ((content + 5 * pixel) * scale).rounded(.up) / scale
         let nameFrame = CGRect(
             origin: CGPoint(x: snapped(width / 2 - name.inkMidX), y: snapped(baseline - name.baseline)),
             size: name.size)
-        let pill = current ? style.pill.map { pill in
-            StripFace.Pill(
-                frame: CGRect(x: (width - content - pixel) / 2, y: baseline - pill.above - pixel / 2,
-                              width: content + pixel, height: pill.above + pill.below + pixel),
-                color: pill.color)
-        } : nil
-        return StripFace.Layout(size: CGSize(width: width, height: height), nameFrame: nameFrame, pill: pill)
+        return StripFace.Layout(size: CGSize(width: width, height: height), nameFrame: nameFrame)
     }
 }
 
@@ -163,7 +124,7 @@ struct CaptionSighting {
     let lineOffset: CGFloat?
 }
 
-/// A magnifying bar's labels with no strip to draw: plates of the bar's colour, at least as large as the native pill
+/// A magnifying bar's labels with no strip to draw: plates of the bar's colour, as large as a native pill would be
 /// and 2 pixels more all round, with the name in the native caption's text. Placed where the strip would place them
 /// as far as that is known: by the baseline and line offset a capture saw, else on the Dock's caption centre.
 struct StripFallback: Equatable {
@@ -195,16 +156,10 @@ struct StripFallback: Equatable {
 /// over it and how they are laid out.
 struct StripFace: Equatable {
 
-    struct Pill: Equatable {
-        let frame: CGRect
-        let color: CGColor
-    }
-
     /// In points from the label's top-left, y down.
     struct Layout: Equatable {
         let size: CGSize
         let nameFrame: CGRect
-        let pill: Pill?
     }
 
     let strip: CGImage

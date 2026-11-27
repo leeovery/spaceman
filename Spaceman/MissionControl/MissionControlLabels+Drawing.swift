@@ -32,6 +32,23 @@ extension MissionControlLabels {
         return time < reference + growCaptionsGone ? .landed : .over
     }
 
+    /// How far through the ride down onto a magnifying bar the current space's caption loses its pill. macOS fades
+    /// the pill out as it rides, its opacity close to the share of the ride still to go, and draws none under the
+    /// thumbnails: filmed on macOS 26.7, half of it was gone 0.117-0.134s after the pointer entered, as the ride
+    /// passed halfway, and none was left by 0.217s. Labels never fade: theirs goes at once, halfway.
+    static let ridePillGone: CGFloat = 0.5
+
+    /// Whether a label wears the current space's pill in the frame reaching the screen at `time`: if it is the
+    /// `current` space's, unless it rides the grow from the names onto a magnifying bar, the pointer having entered
+    /// the bar at `growReference`, and is past `ridePillGone`. Strips draw no pill whatever this says.
+    static func wearsPill(
+        current: Bool, source: LookSource, at time: TimeInterval, growReference: TimeInterval?
+    ) -> Bool {
+        guard current else { return false }
+        guard source.rides, let growReference else { return true }
+        return time < growReference + DockMotion.growCaptions.time(toReach: ridePillGone)
+    }
+
     /// Draws every bar's labels with the bar `retraction` of the way off its screen, or moving with
     /// `slide`. The labels stay opaque all the way: a fading label would show the native caption
     /// through it. `selected` gives each bar's current space, as the Dock has it; without it, macOS's
@@ -99,10 +116,12 @@ extension MissionControlLabels {
                 let running = reflow.flatMap { $0.screen == bar.screen ? $0 : nil }
                 if running?.holds(caption) == true { continue }
                 let reflowing = running?.move(of: caption)?.earlier(by: clock.frameDuration / 2)
-                let current = Self.isCurrent(
-                    caption, selected: selectedPlace, on: measured, currentSpaceIDs: currentSpaceIDs)
+                let inPill = Self.wearsPill(
+                    current: Self.isCurrent(
+                        caption, selected: selectedPlace, on: measured, currentSpaceIDs: currentSpaceIDs),
+                    source: source, at: frameTime, growReference: growing?.reference)
                 let plain = Self.label(for: caption, centre: centre, screen: bar.screen, look: nil)
-                guard var label = dressed(plain, from: source, current: current, style: drawing?.style)
+                guard var label = dressed(plain, from: source, current: inPill, style: drawing?.style)
                 else { continue }
                 label.barHeight = bar.frame.height
                 label.shift = sliding
@@ -183,6 +202,11 @@ extension MissionControlLabels {
             default: return nil
             }
         }
+
+        var rides: Bool {
+            if case .riding = self { return true }
+            return false
+        }
     }
 
     /// Where `caption`'s look comes from on `bar`, in the native look. On a magnifying bar, drawn as `strip` has it,
@@ -205,17 +229,16 @@ extension MissionControlLabels {
     }
 
     /// `label` with its look from `source`, as the current space's or not, placed as high as the native caption sits
-    /// in a bar this tall; a strip's drawn in `style`. Nil when a strip's label can't be drawn: then macOS's caption
-    /// shows rather than the fallback.
+    /// in a bar this tall; a strip's drawn in `style`, with no pill. Nil when a strip's label can't be drawn: then
+    /// macOS's caption shows rather than the fallback.
     private func dressed(
-        _ label: MissionControlLabel, from source: LookSource, current: Bool, style: CaptionStrip.Style?
+        _ label: MissionControlLabel, from source: LookSource, current: Bool, style: CaptionStrip.TextStyle?
     ) -> MissionControlLabel? {
         var dressed = label
         let barTop = label.screen.minY
         switch source {
         case .strip(let strip):
-            guard let style, let drawn = stripFace(for: label, strip: strip, style: style, current: current)
-            else { return nil }
+            guard let style, let drawn = stripFace(for: label, strip: strip, style: style) else { return nil }
             dressed.strip = drawn.face
             dressed.lookOrigin = CGPoint(x: drawn.left, y: barTop + strip.top)
         case .captured(let found):
@@ -224,7 +247,7 @@ extension MissionControlLabels {
             dressed.look = found.look.variant(current: current)
             let landing = strip.flatMap { strip in
                 style.map { strip.landing(underThumbnailAt: label.centre.x,
-                                          inkOffset: stripNames.ink(of: label.covers, style: $0.text).offset) }
+                                          inkOffset: stripNames.ink(of: label.covers, style: $0).offset) }
             }
             dressed.lookOrigin = dressed.look.map {
                 Self.rideEnd(of: $0, leaving: leaving, centre: label.centre, landing: landing, barTop: barTop)
@@ -255,21 +278,15 @@ extension MissionControlLabels {
         hoverTrails[BarMagnification.key(of: bar), default: HoverTrail()].note(hovered, at: time)
     }
 
-    /// Whether `caption`'s space is the current one, which has its pill: the space of the thumbnail the
-    /// Dock has selected on `measured`, the bar as it reported it, or without a selection macOS's current
-    /// spaces. Told by space, as a bar drawn where a desktop is being removed has its places renumbered.
-    /// A selection whose space isn't known has no pill.
+    /// Whether `caption`'s space is the current one, which has its pill where its bar doesn't magnify: the
+    /// space of the thumbnail the Dock has selected on `measured`, the bar as it reported it, or without a
+    /// selection macOS's current spaces. Told by space, as a bar drawn where a desktop is being removed has its
+    /// places renumbered. A selection whose space isn't known has no pill.
     static func isCurrent(
         _ caption: Caption, selected: Int?, on measured: BarLayout, currentSpaceIDs: Set<String>
     ) -> Bool {
-        isCurrent(spaceID: caption.spaceID, selected: selected, on: measured, currentSpaceIDs: currentSpaceIDs)
-    }
-
-    static func isCurrent(
-        spaceID: String, selected: Int?, on measured: BarLayout, currentSpaceIDs: Set<String>
-    ) -> Bool {
-        guard let selected else { return currentSpaceIDs.contains(spaceID) }
-        return measured.spaceIDs.indices.contains(selected) && measured.spaceIDs[selected] == spaceID
+        guard let selected else { return currentSpaceIDs.contains(caption.spaceID) }
+        return measured.spaceIDs.indices.contains(selected) && measured.spaceIDs[selected] == caption.spaceID
     }
 
     static func label(

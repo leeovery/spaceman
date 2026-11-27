@@ -92,7 +92,6 @@ enum CaptionLookStore {
             let wasCurrent: Bool
             let summary: String
             let textColor: [CGFloat]?
-            let pillColor: [CGFloat]?
             let barColor: [CGFloat]?
         }
 
@@ -129,7 +128,7 @@ enum CaptionLookStore {
             return Stored.Look(
                 exact: entry.exact, name: entry.name, plain: variant(look.plain), current: variant(look.current),
                 wasCurrent: look.wasCurrent, summary: look.summary, textColor: look.textColor.flatMap(components),
-                pillColor: look.pillColor.flatMap(components), barColor: look.barColor.flatMap(components))
+                barColor: look.barColor.flatMap(components))
         })
         return try? PropertyListEncoder().encode(stored)
     }
@@ -151,7 +150,6 @@ enum CaptionLookStore {
             var look = NativeCaptionLook(plain: plain, current: current, wasCurrent: kept.wasCurrent,
                                          summary: kept.summary)
             look.textColor = kept.textColor.flatMap(color)
-            look.pillColor = kept.pillColor.flatMap(color)
             look.barColor = kept.barColor.flatMap(color)
             return CaptionLooks.ScreenLooks.Entry(exact: kept.exact, name: kept.name, look: look)
         })

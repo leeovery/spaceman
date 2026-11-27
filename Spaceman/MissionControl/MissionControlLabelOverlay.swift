@@ -94,6 +94,9 @@ final class MissionControlLabelOverlay {
                 labels.filter { $0.screen == screen }, style: style, retraction: retraction, slide: slide,
                 redrawing: redrawing)
         }
+        for window in windows where window.isVisible && !screens.contains(window.axScreen) {
+            window.show([], style: style, retraction: retraction, slide: nil, redrawing: redrawing)
+        }
         CATransaction.commit()
         // Send the labels' new places to the screen now, not whenever the run loop next idles.
         CATransaction.flush()
@@ -101,13 +104,21 @@ final class MissionControlLabelOverlay {
         let now = ProcessInfo.processInfo.systemUptime
         let raise = now - lastRaise >= Self.raiseInterval
         if raise { lastRaise = now }
-        for window in windows {
-            if screens.contains(window.axScreen) {
-                if raise || !window.isVisible { window.orderFrontRegardless() }
-            } else if window.isVisible {
-                window.orderOut(nil)
-            }
+        for window in windows where screens.contains(window.axScreen) {
+            if raise || !window.isVisible { window.orderFrontRegardless() }
         }
+    }
+
+    /// Puts an empty window on each of `screens` ahead of the labels: a window ordered in reaches the screen
+    /// about three frames after (filmed on macOS 26.7), one made afresh about six, while the labels it then shows
+    /// would be on time. Each stays until `hide`, empty while its screen has no labels.
+    func prepare(screens: [CGRect]) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for screen in screens { window(for: screen).show([], style: .current, retraction: 0, slide: nil) }
+        CATransaction.commit()
+        CATransaction.flush()
+        for screen in screens { window(for: screen).orderFrontRegardless() }
     }
 
     /// Whether any label window is on screen.
@@ -241,7 +252,7 @@ private final class OverlayWindow: NSWindow {
 
     func show(
         _ labels: [MissionControlLabel], style: LabelLayer.Style, retraction: CGFloat, slide: TimedSlide?,
-        redrawing: Bool
+        redrawing: Bool = false
     ) {
         while layers.count < labels.count {
             let layer = LabelLayer()
@@ -411,10 +422,9 @@ private final class LabelLayer: CALayer {
     private var content: Content?
     /// The matched look's image, while showing one.
     private var lookImage: CGImage?
-    /// While showing a strip face, whose strip is the layer's contents: the face, and its name and pill.
+    /// While showing a strip face, whose strip is the layer's contents: the face, and its name.
     private var stripFace: StripFace?
     private let stripName = CALayer()
-    private let stripPill = CALayer()
 
     private static let padding = NSSize(width: 6, height: 2)
     /// Room either side of the name inside the box, as the text field this replaced left.
@@ -447,13 +457,10 @@ private final class LabelLayer: CALayer {
         text.alignmentMode = .center
         text.truncationMode = .end
         addSublayer(text)
-        for layer in [stripPill, stripName] {
-            layer.actions = Self.noActions
-            layer.isHidden = true
-            addSublayer(layer)
-        }
+        stripName.actions = Self.noActions
+        stripName.isHidden = true
+        addSublayer(stripName)
         stripName.contentsGravity = .resize
-        stripPill.cornerRadius = MissionControlCaptionLook.pillRadius
     }
 
     /// Core Animation's copy of a layer, as for its presentation layer.
@@ -563,13 +570,6 @@ private final class LabelLayer: CALayer {
         bounds = CGRect(origin: .zero, size: layout.size)
         stripName.contents = face.name
         stripName.frame = Self.layerFrame(layout.nameFrame, height: layout.size.height)
-        if let pill = layout.pill {
-            stripPill.frame = Self.layerFrame(pill.frame, height: layout.size.height)
-            stripPill.backgroundColor = pill.color
-            stripPill.isHidden = false
-        } else {
-            stripPill.isHidden = true
-        }
     }
 
     private func leaveStrip() {
@@ -577,7 +577,6 @@ private final class LabelLayer: CALayer {
         contents = nil
         contentsRect = CGRect(x: 0, y: 0, width: 1, height: 1)
         stripName.isHidden = true
-        stripPill.isHidden = true
         text.isHidden = false
         content = nil
     }

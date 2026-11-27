@@ -41,10 +41,8 @@ struct NativeCaptionLook {
     let wasCurrent: Bool
     /// What was measured, for the log.
     let summary: String
-    /// The caption's text colour, the current space's pill colour on its bar, and the bar's colour beside the
-    /// caption, as measured.
+    /// The caption's text colour and the bar's colour beside the caption, as measured.
     var textColor: CGColor?
-    var pillColor: CGColor?
     var barColor: CGColor?
 
     func variant(current isCurrent: Bool) -> Variant? {
@@ -418,7 +416,6 @@ enum MissionControlCaptionLook {
             result.looks[caption.caption.key] = NativeCaptionLook(
                 plain: plain, current: current, wasCurrent: caption.pill != nil, summary: summary,
                 textColor: cgColor(caption.textColor, in: pixels.colorSpace),
-                pillColor: (caption.pill?.color ?? style?.color).flatMap { cgColor($0, in: pixels.colorSpace) },
                 barColor: barColor(beside: caption, pixels: pixels, scale: scale)
                     .flatMap { cgColor($0, in: pixels.colorSpace) })
         }
@@ -472,19 +469,11 @@ enum MissionControlCaptionLook {
         guard paintBar(canvas, edges: edges, found: found, pixels: pixels, scale: scale),
               let strip = context.makeImage()
         else { return .missed("no bar beside the caption", seen: seen) }
-        let measuredPill = pill.flatMap { pill in
-            cgColor(pill.color, in: pixels.colorSpace).map {
-                CaptionStrip.PillStyle(
-                    padding: CGFloat(max(found.inkLeft - pill.left, pill.right - 1 - found.inkRight)) / scale,
-                    above: CGFloat(found.baseline - pill.top) / scale,
-                    below: CGFloat(pill.bottom - found.baseline) / scale, color: $0)
-            }
-        }
-        return .strip(CaptionStrip(
+        let captured = CaptionStrip(
             image: strip, scale: scale, top: origin.y + CGFloat(top) / scale - hovered.barTop,
             baseline: CGFloat(found.baseline - top) / scale, lineOffset: lineOffset,
-            text: CaptionStrip.TextStyle(fontSize: found.fontSize, color: textColor), pill: measuredPill,
-            background: background), seen: seen)
+            text: CaptionStrip.TextStyle(fontSize: found.fontSize, color: textColor), background: background)
+        return .strip(captured, seen: seen)
     }
 
     /// The columns a caption's plate covers, in pixels of its capture, with the right edge exclusive: its pill and a

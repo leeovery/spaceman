@@ -18,10 +18,10 @@ extension MissionControlLabels {
         CGRequestScreenCaptureAccess()
     }
 
-    /// Readies the native look for a session: the style is decided afresh, captures start afresh, and
-    /// looks captured over another background are dropped, so the native captions show until they are
-    /// captured again. Caption strips are captured afresh too.
-    func beginLookSession() {
+    /// Readies the native look for a session on `screens`: the style is decided afresh, captures start afresh,
+    /// and looks captured over another background, as last read while Mission Control was closed, are dropped,
+    /// so the native captions show until they are captured again. Caption strips are captured afresh too.
+    func beginLookSession(screens: [ScreenInfo]) {
         labelStyle = MissionControlLabelStyle.current()
         restingSignature = nil
         capturedSignature = nil
@@ -33,8 +33,8 @@ extension MissionControlLabels {
         thumbnailsResizedAt = nil
         preparedStyles = [:]
         captionLooks.beginSession()
-        let backgrounds = labelStyle == .nativeLook ? CaptionLooks.currentBackgrounds() : [:]
-        let screens = ScreenInfo.current()
+        let backgrounds = labelStyle != .nativeLook ? [:]
+            : closedBackgrounds.isEmpty ? CaptionLooks.currentBackgrounds() : closedBackgrounds
         magnification.know(screens)
         captionStrips.beginSession(backgrounds: backgrounds, screens: screens)
         guard labelStyle == .nativeLook else { return }

@@ -18,24 +18,19 @@ extension MissionControlLabels {
         let screen: CGRect
     }
 
-    /// Captures a magnifying bar's caption row, per screen and bar height until two captures agree, and once more to
-    /// measure the current space's pill, once the bar has been still, the thumbnails done resizing and the same
-    /// thumbnail hovered for a moment: the line of a caption caught moving is measured off its thumbnail's middle.
-    func captureStripsIfDue(_ measured: [BarLayout], selected: [Int?], now: TimeInterval) {
+    /// Captures a magnifying bar's caption row, per screen and bar height until two captures agree, once the bar has
+    /// been still, the thumbnails done resizing and the same thumbnail hovered for a moment: the line of a caption
+    /// caught moving is measured off its thumbnail's middle.
+    func captureStripsIfDue(_ measured: [BarLayout], now: TimeInterval) {
         guard labelStyle == .nativeLook, !isCapturingStrip,
               let steadySince = CaptionStrips.steadySince(stillSince: stillSince, resizedAt: thumbnailsResizedAt)
         else { return }
-        for (index, bar) in measured.enumerated() where magnification.magnifies(bar) {
+        for bar in measured where magnification.magnifies(bar) {
             guard Self.retraction(bar: bar.frame, screen: bar.screen) <= Self.restSlack,
                   let place = shownLabels(on: bar, at: now).hovered, bar.buttons.indices.contains(place),
-                  let key = captionStrips.key(for: bar), let background = captionStrips.background(forKey: key)
-            else { continue }
-            let current = bar.spaceIDs.indices.contains(place) && Self.isCurrent(
-                spaceID: bar.spaceIDs[place], selected: index < selected.count ? selected[index] : nil, on: bar,
-                currentSpaceIDs: currentSpaceIDs)
-            guard let capture = captionStrips.capture(
-                key: key, hovered: place, current: current, thumbnail: bar.buttons[place].frame, at: now,
-                steadySince: steadySince)
+                  let key = captionStrips.key(for: bar), let background = captionStrips.background(forKey: key),
+                  let capture = captionStrips.capture(
+                    key: key, hovered: place, thumbnail: bar.buttons[place].frame, at: now, steadySince: steadySince)
             else { continue }
             startStripCapture(capture, of: bar, background: background)
             return
@@ -91,8 +86,7 @@ extension MissionControlLabels {
             at: ProcessInfo.processInfo.systemUptime)
         guard outcome != .stale else { return }
         isCapturingStrip = false
-        record("strip capture \(capture.key) hovered \(capture.place + 1)\(capture.current ? " in its pill" : ""): "
-               + "\(outcome)")
+        record("strip capture \(capture.key) hovered \(capture.place + 1): \(outcome)")
         guard outcome == .kept, let strip = captionStrips.kept[capture.key] else { return }
         CaptionStripStore.save(strip, key: capture.key)
     }
@@ -110,8 +104,8 @@ extension MissionControlLabels {
            let scale = drawing.strip?.scale ?? captionStrips.scale(of: bar) {
             preparedStyles[key] = drawing.style
             for caption in bar.captions {
-                _ = stripNames.image(for: caption.name, style: drawing.style.text, scale: scale)
-                _ = stripNames.ink(of: caption.covers, style: drawing.style.text)
+                _ = stripNames.image(for: caption.name, style: drawing.style, scale: scale)
+                _ = stripNames.ink(of: caption.covers, style: drawing.style)
             }
         }
         return drawing
@@ -119,22 +113,22 @@ extension MissionControlLabels {
 
     /// `label` on `fallback`'s plate, centred where a strip would centre it, its names measured in `style`.
     func fallbackPlate(
-        for label: MissionControlLabel, fallback: StripFallback, style: CaptionStrip.Style
+        for label: MissionControlLabel, fallback: StripFallback, style: CaptionStrip.TextStyle
     ) -> (plate: LabelPlate, origin: CGPoint) {
         fallback.plate(
-            nameWidth: stripNames.ink(of: label.name, style: style.text).width,
-            covers: stripNames.ink(of: label.covers, style: style.text), thumbnailMidX: label.centre.x,
+            nameWidth: stripNames.ink(of: label.name, style: style).width,
+            covers: stripNames.ink(of: label.covers, style: style), thumbnailMidX: label.centre.x,
             captionCentreY: label.centre.y, barTop: label.screen.minY)
     }
 
     /// `label` drawn from `strip` in `style`, centred on the native caption's ink under its thumbnail: the face, and
     /// the label's left edge.
     func stripFace(
-        for label: MissionControlLabel, strip: CaptionStrip, style: CaptionStrip.Style, current: Bool
+        for label: MissionControlLabel, strip: CaptionStrip, style: CaptionStrip.TextStyle
     ) -> (face: StripFace, left: CGFloat)? {
-        guard let name = stripNames.image(for: label.name, style: style.text, scale: strip.scale) else { return nil }
-        let covers = stripNames.ink(of: label.covers, style: style.text)
-        let layout = strip.layout(name: name, coversWidth: covers.width, style: style, current: current)
+        guard let name = stripNames.image(for: label.name, style: style, scale: strip.scale) else { return nil }
+        let covers = stripNames.ink(of: label.covers, style: style)
+        let layout = strip.layout(name: name, coversWidth: covers.width)
         let placed = strip.placement(
             centreX: strip.inkCentre(underThumbnailAt: label.centre.x, inkOffset: covers.offset),
             width: layout.size.width, screenLeft: label.screen.minX)

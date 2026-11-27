@@ -53,6 +53,9 @@ final class MissionControlLabels {
     /// The last session's bars, moved to rest, for a swipe that starts before the Dock reports
     /// the bar.
     var restingLayouts: [BarLayout] = []
+    /// Each display's bar of names as the Dock last reported it, moved to rest: Mission Control opens on these,
+    /// though a session may have ended with a bar grown into thumbnails.
+    private var namesRows: [CGDirectDisplayID: BarLayout] = [:]
     /// The Dock reader's measurement last seen, to notice a new one.
     var layoutsVersion = 0
     /// The bar's retraction as last drawn.
@@ -145,7 +148,7 @@ final class MissionControlLabels {
     /// The names drawn over strips, rendered ahead of their thumbnails' hover, and the style each strip's names were
     /// last rendered in this session.
     var stripNames = StripNames()
-    var preparedStyles: [String: CaptionStrip.Style] = [:]
+    var preparedStyles: [String: CaptionStrip.TextStyle] = [:]
     /// Counts frames that found the bars moving, or off their places, so a strip's capture can tell whether they
     /// moved while it ran; and since when they have been still. Thumbnails resizing don't count.
     var barMotionCount = 0
@@ -154,6 +157,10 @@ final class MissionControlLabels {
     var thumbnailsResizedAt: TimeInterval?
     /// The style this session's labels are drawn in, fixed at its start so a session never mixes them.
     var labelStyle = MissionControlLabelStyle.spaceColors
+    /// What each screen shows behind its bar, as `CaptionLooks.currentBackgrounds()` says, read while Mission
+    /// Control is closed, and when.
+    var closedBackgrounds: [String: String] = [:]
+    private var closedBackgroundsReadAt: TimeInterval?
     var requestedCaptureAccess = false
     /// Each display's current space, whose caption Mission Control puts in a pill.
     var currentSpaceIDs: Set<String> = []
@@ -209,6 +216,9 @@ final class MissionControlLabels {
 
     /// Fraction of interval the poll may be late.
     private static let pollToleranceFraction = 0.2
+
+    /// How often to read what the screens show behind their bars while Mission Control is closed.
+    private static let backgroundsInterval: TimeInterval = 1
 
     /// Timeout for AX calls, so a busy or hung process cannot stall Spaceman for long.
     static let axMessagingTimeout: Float = 0.1
@@ -321,6 +331,7 @@ final class MissionControlLabels {
         pollTimer.tolerance = interval * Self.pollToleranceFraction
         RunLoop.main.add(pollTimer, forMode: .common)
         timer = pollTimer
+        readBackgroundsIfDue()
         if Self.spacesBarIsInDock { swipe.start() }
         requestCaptureAccessIfNeeded()
         MissionControlMotionRecorder.shared.start()
@@ -342,6 +353,9 @@ final class MissionControlLabels {
         overlay.close()
         apps = [:]
         restingLayouts = []
+        namesRows = [:]
+        closedBackgrounds = [:]
+        closedBackgroundsReadAt = nil
         showingWindowManagerLabels = false
         lastMismatch = nil
         lastOutcome = nil
@@ -379,6 +393,7 @@ final class MissionControlLabels {
         guard !isTracking else { return }
         // Listening for swipes needs Accessibility, which may have been granted since launch.
         if Self.spacesBarIsInDock { swipe.start() }
+        readBackgroundsIfDue()
 
         // macOS 27+: WindowManager. macOS 26.7's WindowManager shows the Spaces Bar too, at its resting place
         // from the first moment of a swipe, so on 26 the Dock alone is followed.
@@ -421,13 +436,27 @@ final class MissionControlLabels {
 
     // MARK: - Dock tracking
 
+    /// Reads what the screens show behind their bars, at most every `backgroundsInterval`, for the native look.
+    /// Never as Mission Control opens: each read asks another process, 1.5-5ms at rest and maybe much longer while
+    /// the system is busy opening it, and nothing should hold up the labels' first frame.
+    private func readBackgroundsIfDue() {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard Self.spacesBarIsInDock, now - (closedBackgroundsReadAt ?? -.infinity) >= Self.backgroundsInterval,
+              MissionControlLabelStyle.current() == .nativeLook
+        else { return }
+        closedBackgroundsReadAt = now
+        closedBackgrounds = CaptionLooks.currentBackgrounds()
+    }
+
     func beginTracking() {
         guard !isTracking, Self.spacesBarIsInDock, AXIsProcessTrusted(),
               appElement("com.apple.dock") != nil, let pid = apps["com.apple.dock"]?.pid
         else { return }
         isTracking = true
         trackingStarted = ProcessInfo.processInfo.systemUptime
-        beginLookSession()
+        let screens = ScreenInfo.current()
+        overlay.prepare(screens: screens.map(\.frame))
+        beginLookSession(screens: screens)
         magnification.interrupt()
         rematchKeptLayouts()
         sawBar = false
@@ -436,11 +465,13 @@ final class MissionControlLabels {
         currentSpaceIDs = Self.currentSpaceIDs()
         lastMismatch = nil
         layoutsVersion = 0
-        reader.begin(dockPID: pid, screens: ScreenInfo.current(), labelsUnnamed: labelStyle.labelsUnnamed)
+        reader.begin(dockPID: pid, screens: screens, labelsUnnamed: labelStyle.labelsUnnamed)
         pointer = (trackingStarted, Self.axPoint(NSEvent.mouseLocation))
         pointerPace = PointerPace()
         hoverTrails = [:]
         clock.start()
+        record(String(format: "tracking began in %.1fms", (ProcessInfo.processInfo.systemUptime - trackingStarted)
+                      * 1000))
         tick()
     }
 
@@ -452,7 +483,15 @@ final class MissionControlLabels {
         let rematch = { (layout: BarLayout) in
             layout.rematched(labelsUnnamed: labelsUnnamed, storedNames: storedNames)
         }
-        restingLayouts = restingLayouts.map(rematch)
+        restingLayouts = Self.openingLayouts(kept: restingLayouts, namesRows: namesRows).map(rematch)
+    }
+
+    /// The bars Mission Control opens on: those `kept` from the last session, each grown into thumbnails as
+    /// it ended back to its bar of names, as `namesRows` last had it, where that is known.
+    static func openingLayouts(kept: [BarLayout], namesRows: [CGDirectDisplayID: BarLayout]) -> [BarLayout] {
+        kept.map { layout in
+            layout.frame.height > expandedBarHeight ? namesRows[layout.displayID] ?? layout : layout
+        }
     }
 
     static func axPoint(_ point: NSPoint) -> CGPoint {
@@ -663,7 +702,7 @@ final class MissionControlLabels {
                     resting = true
                     captureIfSettled(layouts, now: now)
                 }
-                captureStripsIfDue(layouts, selected: reading.selected, now: now)
+                captureStripsIfDue(layouts, now: now)
             }
         }
     }
@@ -692,9 +731,13 @@ final class MissionControlLabels {
                 restingLayouts = reading.layouts.map { $0.atRest() }
                 settleDrop(reading.layouts, answered: reading.answered)
                 logOutcome("Spaces Bar found, \(reading.layouts.reduce(0) { $0 + $1.captions.count }) labels shown")
-                for layout in reading.layouts where layout.frame.height > Self.expandedBarHeight {
-                    let centred = layout.atRest().centred()
-                    expandedLayoutsByCount["\(layout.displayID)|\(layout.buttons.count)"] = centred
+                for layout in reading.layouts {
+                    if layout.frame.height > Self.expandedBarHeight {
+                        let centred = layout.atRest().centred()
+                        expandedLayoutsByCount["\(layout.displayID)|\(layout.buttons.count)"] = centred
+                    } else {
+                        namesRows[layout.displayID] = layout.atRest()
+                    }
                 }
                 if let running = grow, let reported = reading.layouts.first(where: {
                     $0.screen == running.screen && $0.frame.height > Self.expandedBarHeight
