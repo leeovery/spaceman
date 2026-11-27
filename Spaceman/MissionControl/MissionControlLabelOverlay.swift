@@ -72,10 +72,6 @@ final class MissionControlLabelOverlay {
     static let stripHeight: CGFloat = 400
 
     private var windows: [OverlayWindow] = []
-    /// The label windows' level: see `level(windows:over:dockPID:)`.
-    var level = MissionControlLabelOverlay.defaultLevel {
-        didSet { for window in windows { window.level = NSWindow.Level(rawValue: level) } }
-    }
     /// Whether the label windows belong to every desktop: see `showOnEveryDesktop`.
     private var onEveryDesktop = true
     private var lastRaise: TimeInterval = 0
@@ -177,7 +173,7 @@ final class MissionControlLabelOverlay {
 
     private func window(for screen: CGRect) -> OverlayWindow {
         if let existing = windows.first(where: { $0.axScreen == screen }) { return existing }
-        let window = OverlayWindow(screen: screen, level: level)
+        let window = OverlayWindow(screen: screen)
         window.joinsEveryDesktop(onEveryDesktop)
         windows.append(window)
         return window
@@ -215,15 +211,16 @@ struct ListedWindow: Equatable {
 
 extension MissionControlLabelOverlay {
 
-    /// The label windows' level without a better one: over everything.
+    /// The label windows' level: over everything.
     static let defaultLevel = Int(CGWindowLevelForKey(.screenSaverWindow)) + 1
     /// How far down a screen's top windows lie entirely to count as the menu bar's: the bar and its status items.
     static let menuBarDepth: CGFloat = 50
 
-    /// The label windows' level, from the `windows` on screen and the bars' `areas`: just above the Dock's highest
-    /// window there, which holds the Spaces Bar and what Mission Control draws, and below the menu bar's windows,
-    /// or the main menu's level where none shows. As Mission Control closes, macOS brings the menu bar back over its
-    /// captions; there, it covers the labels too. `defaultLevel` with no list, no Dock window there or no room.
+    /// The level the label windows would take, noted in the debug recording only, from the `windows` on screen and
+    /// the bars' `areas`: just above the Dock's highest window there, which holds the Spaces Bar and what Mission
+    /// Control draws, and below the menu bar's windows, or the main menu's level where none shows. As Mission Control
+    /// closes, macOS brings the menu bar back over its captions; there, it would cover the labels too. `defaultLevel`
+    /// with no list, no Dock window there or no room.
     static func level(
         windows: [ListedWindow]?, over areas: [CGRect], dockPID: pid_t
     ) -> (level: Int, reason: String) {
@@ -283,7 +280,7 @@ private final class OverlayWindow: NSWindow {
     /// Keyframes per slide: one every 4-6ms, finer than a frame.
     private static let slideSteps = 60
 
-    init(screen: CGRect, level: Int) {
+    init(screen: CGRect) {
         self.axScreen = screen
         let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
         let height = min(MissionControlLabelOverlay.stripHeight, screen.height)
@@ -293,7 +290,7 @@ private final class OverlayWindow: NSWindow {
             width: screen.width,
             height: height)
         super.init(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
-        self.level = NSWindow.Level(rawValue: level)
+        level = NSWindow.Level(rawValue: MissionControlLabelOverlay.defaultLevel)
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false

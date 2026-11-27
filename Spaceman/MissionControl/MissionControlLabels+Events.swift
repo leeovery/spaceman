@@ -51,7 +51,7 @@ extension MissionControlLabels {
                 noteMotion()
                 slide = TimedSlide(timing: DockMotion.clickClose, reference: time, from: 0, to: 1)
                 record("close expanded from a click", at: time)
-                settleOverlayLevel(at: "closing", choosing: false)
+                settleOverlayLevel(at: "closing")
             }
             return
         }
@@ -66,7 +66,7 @@ extension MissionControlLabels {
             // This desktop: Mission Control closes, the bar sliding up.
             slide = TimedSlide(timing: DockMotion.choose, reference: time, from: 0, to: 1)
             record("chose this desktop", at: time)
-            settleOverlayLevel(at: "closing", choosing: false)
+            settleOverlayLevel(at: "closing")
             return
         }
         // Another desktop zooms out of its thumbnail over the bar, which stays where it is, its captions

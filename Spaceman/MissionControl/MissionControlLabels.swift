@@ -479,12 +479,11 @@ final class MissionControlLabels {
     /// Lists the windows over the bars off the main thread and notes them in the recording, as at `moment`, with the
     /// level they would give the label windows. Only noted: under the menu bar's level macOS moves a window below
     /// the menu bar, and the list at tracking start lacks Mission Control's windows, so applying it put the labels
-    /// 30pt low and under Mission Control (filmed 2026-11-27).
-    func settleOverlayLevel(
-        at moment: String, dockPID: pid_t? = nil, screens: [ScreenInfo] = ScreenInfo.current(), choosing: Bool = true
-    ) {
-        guard let pid = dockPID ?? apps["com.apple.dock"]?.pid else { return }
-        let areas = screens.map { screen in
+    /// 30pt low and under Mission Control (filmed 2026-11-27). Skipped without the recording: the list asks the
+    /// window server.
+    func settleOverlayLevel(at moment: String, dockPID: pid_t? = nil, screens: [ScreenInfo]? = nil) {
+        guard MissionControlMotionRecorder.isEnabled, let pid = dockPID ?? apps["com.apple.dock"]?.pid else { return }
+        let areas = (screens ?? ScreenInfo.current()).map { screen in
             CGRect(origin: screen.frame.origin, size: CGSize(
                 width: screen.frame.width, height: min(MissionControlLabelOverlay.stripHeight, screen.frame.height)))
         }
@@ -1053,7 +1052,7 @@ final class MissionControlLabels {
                                reference: reference, from: retraction, to: 1)
         slide = close
         record(expanded ? "close expanded" : "close", at: reference)
-        settleOverlayLevel(at: "closing", choosing: false)
+        settleOverlayLevel(at: "closing")
         return .slide(close)
     }
 

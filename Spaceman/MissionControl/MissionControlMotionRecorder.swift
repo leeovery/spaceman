@@ -69,6 +69,8 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
     private var file: FileHandle?
     private var filmings: [Filming] = []
     private var isStarting = false
+    /// How many times the recorder has been stopped, so films a start brings in after a stop are stopped too.
+    private var stops = 0
 
     /// Opens the log and, filming, starts streaming if allowed to record the screen. Main thread.
     func start() {
@@ -76,12 +78,13 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
         logQueue.async { self.openFile() }
         guard Self.savesVideo, filmings.isEmpty, !isStarting, CGPreflightScreenCaptureAccess() else { return }
         isStarting = true
-        let films = Self.films
-        Task { await startFilming(films) }
+        let films = Self.films, stops = stops
+        Task { await startFilming(films, after: stops) }
     }
 
     /// Main thread.
     func stop() {
+        stops += 1
         filmings.forEach { $0.stop() }
         filmings = []
         if Self.isEnabled { note("recorder stopped") }
@@ -93,6 +96,16 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
         among applications: [Application], pid: pid_t = getpid(), processID: (Application) -> pid_t
     ) -> [Application] {
         applications.filter { processID($0) == pid }
+    }
+
+    /// Of the films `started` by a start made after the recorder's `stops`th stop, those it keeps, `now` stops having
+    /// been made by the time they came in: none once it has been stopped since, each of them then stopped by `stop`.
+    static func kept<Started>(
+        _ started: [Started], startedAfter stops: Int, now: Int, stop: (Started) -> Void
+    ) -> [Started] {
+        guard now != stops else { return started }
+        started.forEach(stop)
+        return []
     }
 
     /// Writes `text`, stamped with `time` (system uptime). Any thread.
@@ -130,8 +143,9 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
         if let data = (line + "\n").data(using: .utf8) { file?.write(data) }
     }
 
-    /// Starts each of `films` streaming the main display; one failing leaves the others filming.
-    private func startFilming(_ films: [Film]) async {
+    /// Starts each of `films` streaming the main display, for a start made after the `stops`th stop; one failing
+    /// leaves the others filming.
+    private func startFilming(_ films: [Film], after stops: Int) async {
         var started: [Filming] = []
         do {
             // Every app, not only those with windows on screen: at launch Spaceman shows none, and an app left
@@ -155,7 +169,7 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
             note("recorder failed: \(error.localizedDescription)")
         }
         await MainActor.run { [started] in
-            filmings = started
+            filmings = Self.kept(started, startedAfter: stops, now: self.stops) { $0.stop() }
             isStarting = false
         }
     }

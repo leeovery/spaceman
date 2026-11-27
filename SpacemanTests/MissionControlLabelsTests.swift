@@ -2768,6 +2768,18 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(MissionControlMotionRecorder.spaceman(among: applications) { $0.pid }.map(\.name), ["Spaceman"])
     }
 
+    /// Films a start brings in after the recorder was stopped would film on, unseen, until the next launch.
+    func testFilmsStartedBeforeAStopAreStoppedAsTheyComeIn() {
+        var stopped: [String] = []
+        func kept(now: Int) -> [String] {
+            MissionControlMotionRecorder.kept(["native", "shown"], startedAfter: 2, now: now) { stopped.append($0) }
+        }
+        XCTAssertEqual(kept(now: 2), ["native", "shown"])
+        XCTAssertEqual(stopped, [])
+        XCTAssertEqual(kept(now: 3), [])
+        XCTAssertEqual(stopped, ["native", "shown"])
+    }
+
     func testTheFilmedBandIs150PointsUnlessAskedOtherwise() {
         XCTAssertEqual(MissionControlMotionRecorder.band(0, displayHeight: 1440), 150)
         XCTAssertEqual(MissionControlMotionRecorder.band(-20, displayHeight: 1440), 150)
