@@ -491,8 +491,10 @@ final class MissionControlLabels {
         tick()
     }
 
-    /// Lists the windows over the bars off the main thread and, `choosing`, puts the label windows at the level they
-    /// give; noting both in the recording, as at `moment`.
+    /// Lists the windows over the bars off the main thread and notes them in the recording, as at `moment`, with the
+    /// level they would give the label windows. Only noted: under the menu bar's level macOS moves a window below
+    /// the menu bar, and the list at tracking start lacks Mission Control's windows, so applying it put the labels
+    /// 30pt low and under Mission Control (filmed 2026-11-27).
     func settleOverlayLevel(
         at moment: String, dockPID: pid_t? = nil, screens: [ScreenInfo] = ScreenInfo.current(), choosing: Bool = true
     ) {
@@ -506,10 +508,9 @@ final class MissionControlLabels {
             let chosen = MissionControlLabelOverlay.level(windows: windows, over: areas, dockPID: pid)
             DispatchQueue.main.async {
                 guard let self else { return }
-                if choosing { self.overlay.level = chosen.level }
                 self.record("windows over the bar (\(moment)): "
                             + (windows.map { MissionControlLabelOverlay.describe($0, over: areas) } ?? "no list"))
-                self.record("overlay level \(chosen.level) \(choosing ? "chosen" : "would be"): \(chosen.reason)")
+                self.record("overlay level \(chosen.level) would be: \(chosen.reason)")
             }
         }
     }
