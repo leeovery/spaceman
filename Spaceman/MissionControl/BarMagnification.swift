@@ -76,15 +76,10 @@ struct BarMagnification {
         bar.frame.height > MissionControlLabels.expandedBarHeight && learned[learnedKey(of: bar)] == .magnifies
     }
 
-    /// Whether `bar` shows thumbnails known not to magnify: never a bar of names.
-    func doesNotMagnify(_ bar: BarLayout) -> Bool {
-        bar.frame.height > MissionControlLabels.expandedBarHeight && learned[learnedKey(of: bar)] == .doesNotMagnify
-    }
-
     /// Whether `bar`'s thumbnails are read one by one as they resize: thumbnails known to magnify, or not
     /// known yet. Never a bar of names, nor thumbnails known not to magnify.
     func follows(_ bar: BarLayout) -> Bool {
-        bar.frame.height > MissionControlLabels.expandedBarHeight && !doesNotMagnify(bar)
+        bar.frame.height > MissionControlLabels.expandedBarHeight && learned[learnedKey(of: bar)] != .doesNotMagnify
     }
 
     /// Learns from `bar` as the Dock reported it in a reading taken at `read`, with the pointer at `pointer`

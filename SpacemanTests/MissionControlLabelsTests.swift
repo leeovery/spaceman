@@ -742,113 +742,6 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertTrue(MissionControlLabels.clickTimings.contains(DockMotion.clickClose))
     }
 
-    // MARK: - A bar of thumbnails that doesn't magnify
-
-    /// With 15 desktops on a 2560pt screen the thumbnails don't magnify, and the Dock pans the bar. Four pans of
-    /// 33-454pt, filmed: each with the wait from the answer to the reading before to the ask of the one that first
-    /// showed it, and its captions' travel by milliseconds after that ask (the hand run's 30fps film, stamped a frame
-    /// late, a frame sooner). One timing whatever the distance: within 11pt in the first frames of the longest, whose
-    /// start the wait puts within 3ms, and 3pt after. The last waited 103ms, this app held up: timed from the middle,
-    /// the labels would be 12pt behind.
-    func testAPanOfABarOfThumbnailsThatDoNotMagnifyMovesAsFilmed() {
-        let frame = 1.0 / 60
-        let pans: [(wait: Double, distance: CGFloat, filmed: [(ms: Double, travel: CGFloat)])] = [
-            (14.9, 454, [(0.7, 0), (17.3, 44), (34.0, 101), (50.7, 173.5), (67.3, 235.5), (84.0, 289.5),
-                         (100.7, 333), (117.3, 366.5), (134.0, 392.5), (150.7, 412.5), (167.3, 427.5), (184.0, 438.5),
-                         (200.7, 446), (217.3, 451), (234.0, 453), (250.7, 453.5)]),
-            (31.4, 414, [(0.7, 0), (17.4, 59.5), (34.1, 118.5), (50.7, 181), (67.4, 236.5), (84.1, 281.5),
-                         (100.7, 317.5), (117.4, 345), (134.1, 366.5), (150.7, 382.5), (167.4, 394.5), (184.1, 403.5),
-                         (200.7, 409.5), (217.4, 412.5), (234.1, 413.5)]),
-            (14.7, 206, [(1.0, 0), (17.6, 18.5), (34.3, 44), (51.0, 76.5), (67.6, 105), (84.3, 130), (101.0, 150),
-                         (117.6, 165.5), (134.3, 177.5), (151.0, 186.8), (167.6, 193.8), (184.3, 198.8),
-                         (201.0, 202.2), (217.6, 204.2), (234.3, 205.2)]),
-            (103.3, 33.1, [(11.9, 2), (45.2, 10), (111.9, 26), (145.2, 30), (178.5, 32.5), (211.9, 33.5),
-                           (245.2, 34)]),
-        ]
-        for pan in pans {
-            let changedAt = MissionControlLabels.changeTime(previousAnswer: 10 - pan.wait / 1000, asked: 10)
-            let sliding = MissionControlLabels.sidewaysSlide(
-                from: pan.distance, changedAt: changedAt, asked: 10, frameDuration: frame, pans: true)
-            XCTAssertEqual(sliding.slide.timing, DockMotion.Unmagnified.pan)
-            XCTAssertFalse(sliding.leads)
-            for (ms, travel) in pan.filmed {
-                let travelled = pan.distance - sliding.slide.offset(at: 10 + ms / 1000)
-                XCTAssertEqual(travelled, travel, accuracy: ms < 60 ? 11 : 3, "\(pan.distance)pt at \(ms)ms")
-            }
-        }
-    }
-
-    /// Thumbnails that magnify, or not known yet, slide as before: on the shift's timing from the middle of the
-    /// wait, half a frame early.
-    func testOtherSidewaysSlidesKeepTheShiftsTiming() {
-        let sliding = MissionControlLabels.sidewaysSlide(from: 8, changedAt: 9.9, asked: 10, frameDuration: 1.0 / 60,
-                                                         pans: false)
-        XCTAssertEqual(sliding.slide, TimedShift(timing: DockMotion.shift, reference: 9.9, from: 8))
-        XCTAssertTrue(sliding.leads)
-        XCTAssertEqual(MissionControlLabels.changeTime(previousAnswer: 9.98, asked: 10), 9.99, accuracy: 1e-9)
-        XCTAssertEqual(MissionControlLabels.changeTime(previousAnswer: 0, asked: 10), 10)
-    }
-
-    /// Closed from the keyboard, the bar's captions' rise in three closes, filmed, by milliseconds after the middle
-    /// of the wait from the answer to the reading before to the ask of the one that showed the bar gone: the Dock,
-    /// closing, can take a frame to answer, so its answer is no guide. The first frame after one the film missed
-    /// counts a frame sooner, as the screen showed it. The labels, half a frame early, rise with them: within 7pt,
-    /// but for the close the Dock held back a frame from 108ms, 11pt.
-    func testABarOfThumbnailsThatDoNotMagnifyClosedFromTheKeyboardRisesAsFilmed() {
-        let frame = 1.0 / 60
-        let closes: [(accuracy: CGFloat, filmed: [(ms: Double, rise: CGFloat)])] = [
-            (7, [(8, 0), (25, 2), (42, 6), (75, 23), (92, 35), (125, 67), (142, 83), (158, 99)]),
-            (7, [(8, 0), (25, 1), (41, 5), (75, 21), (91, 34), (108, 49), (125, 65), (141, 81), (158, 98)]),
-            (11, [(9, 0), (25, 2), (42, 6), (75, 24), (92, 36), (125, 51), (142, 68), (159, 84), (175, 100.5)]),
-        ]
-        let timed = MissionControlLabels.keyboardClose(expanded: true, unmagnified: true, changedAt: 9.99,
-                                                       previousAnswer: 9.984, asked: 10)
-        XCTAssertEqual(timed.timing, DockMotion.Unmagnified.close)
-        XCTAssertEqual(timed.reference, 9.992, accuracy: 1e-9)
-        for close in closes {
-            for (ms, rise) in close.filmed {
-                let risen = 146 * timed.timing.progress(at: timed.reference + ms / 1000 + frame / 2,
-                                                        from: timed.reference)
-                XCTAssertEqual(risen, rise, accuracy: close.accuracy, "at \(ms)ms")
-            }
-        }
-        let names = MissionControlLabels.keyboardClose(expanded: false, unmagnified: false, changedAt: 9.99,
-                                                       previousAnswer: 9.984, asked: 10)
-        XCTAssertEqual(names.timing, DockMotion.close)
-        XCTAssertEqual(names.reference, 9.99)
-        let magnifying = MissionControlLabels.keyboardClose(expanded: true, unmagnified: false, changedAt: 9.99,
-                                                            previousAnswer: 9.984, asked: 10)
-        XCTAssertEqual(magnifying.timing, DockMotion.closeExpanded)
-        XCTAssertEqual(magnifying.reference, 9.99)
-    }
-
-    /// Closed by a click off the bars, the captions' rise, filmed, by milliseconds after the click, counted as for
-    /// the keyboard: three clicks sent by a script, two the Dock held back a frame, and two by hand, whose closes ran
-    /// sooner after the release this app sees. The labels, half a frame early, rise with them as near as one timing
-    /// takes them: within 4pt, 9-13pt and 17-22pt. Other bars of thumbnails close on the click's timing as before.
-    func testABarOfThumbnailsThatDoNotMagnifyClosedByAClickRisesAsFilmed() {
-        let frame = 1.0 / 60
-        let closes: [(accuracy: CGFloat, filmed: [(ms: Double, rise: CGFloat)])] = [
-            (4, [(9, 0), (26, 2), (43, 6), (76, 23), (93, 36), (109, 51), (143, 84), (159, 100)]),
-            (4, [(8, 0), (25, 2), (41, 6), (75, 23), (92, 35), (108, 50), (125, 67), (142, 83), (158, 99.5)]),
-            (4, [(2, 0), (19, 0), (36, 4), (69, 19), (86, 30), (102, 44), (136, 76), (152, 93.5)]),
-            (13.5, [(3, 0), (20, 0), (36, 4), (70, 10), (87, 31), (103, 45), (120, 61), (137, 77), (153, 94)]),
-            (9, [(1, 0), (17, 0), (34, 2), (51, 6), (84, 23), (101, 36), (118, 51), (134, 68), (151, 84), (167, 100)]),
-            (17.5, [(12, 0), (45, 16), (95, 56), (162, 105)]),
-            (22, [(10, 0), (27, 12), (77, 49), (144, 82)]),
-        ]
-        let timing = MissionControlLabels.clickClose(unmagnified: true)
-        XCTAssertEqual(timing, DockMotion.Unmagnified.clickClose)
-        for close in closes {
-            for (ms, rise) in close.filmed {
-                let risen = 146 * timing.progress(at: ms / 1000 + frame / 2, from: 0)
-                XCTAssertEqual(risen, rise, accuracy: close.accuracy, "at \(ms)ms")
-            }
-        }
-        XCTAssertEqual(MissionControlLabels.clickClose(unmagnified: false), DockMotion.clickClose)
-        XCTAssertTrue(MissionControlLabels.clickTimings.contains(DockMotion.Unmagnified.clickClose))
-    }
-
     /// As Mission Control closes, macOS brings the menu bar back over its captions: the label windows sit just above
     /// the Dock's windows over the bar, below the menu bar's, so it covers them too.
     func testTheLabelWindowsSitAboveTheDocksWindowsAndBelowTheMenuBar() {
@@ -1428,14 +1321,10 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertNil(magnification.learn(from: even, read: 10, pointer: overSixth, at: 10))
         let justShort = settled - 0.01
         XCTAssertNil(magnification.learn(from: even, read: justShort, pointer: overSixth, at: justShort))
-        XCTAssertFalse(magnification.doesNotMagnify(even))
         XCTAssertEqual(magnification.learn(from: even, read: settled, pointer: overSixth, at: settled),
                        .doesNotMagnify)
         XCTAssertFalse(magnification.magnifies(even))
         XCTAssertFalse(magnification.follows(even))
-        XCTAssertTrue(magnification.doesNotMagnify(even))
-        XCTAssertFalse(magnification.doesNotMagnify(thumbnailBar(height: 40)))
-        XCTAssertFalse(learnedToMagnify().doesNotMagnify(magnifiedBar))
     }
 
     /// A run of even widths counts only unbroken, with the pointer over a thumbnail and nothing else moving
@@ -2230,54 +2119,6 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(timing.end(from: 0), 0.241, accuracy: 0.001)
         // The thumbnails' timing, which the labels took before, is a quarter of the way behind at 0.1s.
         XCTAssertLessThan(Double(DockMotion.expand.progress(at: 0.100, from: 0)), 0.15)
-    }
-
-    /// On a bar of thumbnails that don't magnify, as with 15 desktops on a 2560pt screen, macOS's captions ride down
-    /// on a timing of their own, starting at one of two times about 15ms apart. Their depth, filmed in ten
-    /// expansions, by milliseconds after the pointer entered (the hand run's two a frame sooner): five start about
-    /// 30ms after; three by a script and the two by hand later, stuttering. The labels ride with them, with no
-    /// lead, as near as one timing takes both: within 14pt.
-    func testLabelsRideTheGrowOntoABarThatDoesNotMagnifyAsMacOSsCaptionsDo() {
-        let ride = MissionControlLabels.rideTiming(magnifies: false, unmagnified: true, frameDuration: 1.0 / 60)
-        XCTAssertEqual(ride.timing, DockMotion.Unmagnified.ride)
-        XCTAssertEqual(ride.lead, 0)
-        let filmed: [[(ms: Double, depth: CGFloat)]] = [
-            [(34, 2), (50, 11), (67, 20), (84, 30), (100, 42), (117, 55), (134, 70), (150, 81), (167, 91), (184, 99),
-             (200, 106), (217, 110), (234, 112)],
-            [(34, 1), (51, 5), (68, 18), (84, 28), (101, 40), (118, 54), (134, 68), (151, 80), (168, 89.5), (184, 98),
-             (201, 105), (218, 109), (251, 112)],
-            [(34, 1), (50, 11), (67, 19), (84, 29), (100, 41), (117, 55), (150, 69), (167, 80), (184, 90), (200, 99),
-             (234, 109), (250, 112)],
-            [(34, 1), (50, 11), (67, 19), (84, 29), (100, 40), (117, 54), (134, 68), (150, 80), (167, 90), (184, 99),
-             (200, 105), (234, 109), (250, 112)],
-            [(34, 1), (51, 10), (68, 18), (84, 28), (101, 39), (118, 54), (134, 67), (151, 79), (168, 89), (184, 98),
-             (201, 105), (218, 109), (251, 112)],
-            [(17, 0), (50, 3), (67, 15), (84, 24), (117, 35), (134, 48), (150, 62.5), (167, 73), (184, 86), (200, 95),
-             (217, 103), (234, 108), (250, 111), (267, 112)],
-            [(17, 0), (50, 4), (67, 9), (84, 16), (100, 26), (117, 37), (134, 50), (150, 64.5), (167, 88), (184, 97),
-             (200, 104), (217, 109), (234, 111), (250, 112)],
-            [(18, 0), (51, 3), (68, 16), (84, 25), (118, 36), (134, 49), (151, 76), (184, 87), (201, 96), (218, 108),
-             (234, 111), (251, 112)],
-            [(67, 3), (133, 48), (183, 95), (217, 108), (250, 112)],
-            [(100, 15), (133, 62), (167, 86), (200, 108), (250, 112)],
-        ]
-        for expansion in filmed {
-            for (ms, depth) in expansion {
-                XCTAssertEqual(112 * ride.timing.progress(at: ms / 1000, from: 0), depth, accuracy: 14, "at \(ms)ms")
-            }
-        }
-    }
-
-    /// A magnifying bar's labels ride as its captions do, with no lead; others, not known, as the thumbnails grow,
-    /// half a frame early.
-    func testTheRideTakesTheTimingOfTheBarsMagnification() {
-        let frame = 1.0 / 60
-        let magnifying = MissionControlLabels.rideTiming(magnifies: true, unmagnified: false, frameDuration: frame)
-        XCTAssertEqual(magnifying.timing, DockMotion.growCaptions)
-        XCTAssertEqual(magnifying.lead, 0)
-        let unknown = MissionControlLabels.rideTiming(magnifies: false, unmagnified: false, frameDuration: frame)
-        XCTAssertEqual(unknown.timing, DockMotion.expand)
-        XCTAssertEqual(unknown.lead, frame / 2)
     }
 
     /// The labels sat on the names for two frames as macOS's captions rode down, then jumped after them: the ride

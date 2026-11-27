@@ -79,9 +79,8 @@ final class MissionControlLabels {
     var lastPointerRecord: CGPoint?
     /// The layouts last drawn from the Dock, to notice the hover-expanded thumbnails sliding sideways.
     private var shownLayouts: [BarLayout] = []
-    /// The first bar's thumbnails sliding sideways, which the Dock reports only the end of; drawn half a frame early
-    /// if it `leads`, as for `slide`.
-    var shift: (screen: CGRect, slide: TimedShift, leads: Bool)?
+    /// The first bar's thumbnails sliding sideways, which the Dock reports only the end of.
+    var shift: (screen: CGRect, slide: TimedShift)?
     /// The bar of names growing into thumbnails, which the Dock reports only once it is well under way:
     /// replayed from the pointer entering the bar, `from` its names `to` the thumbnails' places.
     var grow: (screen: CGRect, reference: TimeInterval, from: BarLayout, to: BarLayout)?
@@ -800,9 +799,10 @@ final class MissionControlLabels {
                     to.captions = running.to.captions.count == to.captions.count ? to.captions : running.to.captions
                     grow?.to = to
                 } else {
-                    let changedAt = Self.changeTime(previousAnswer: latestReadingTime, asked: reading.time)
+                    // The reader noticed the change as it began this reading.
+                    let changedAt = latestReadingTime > 0 ? (latestReadingTime + reading.time) / 2 : reading.time
                     if !noticeDesktopsChange(from: shownLayouts, to: reading.layouts, at: changedAt) {
-                        noticeShift(from: shownLayouts, to: reading.layouts, at: changedAt, asked: reading.time)
+                        noticeShift(from: shownLayouts, to: reading.layouts, at: changedAt)
                     }
                 }
                 noteThumbnailsResizing(from: shownLayouts, to: reading.layouts)
@@ -866,8 +866,8 @@ final class MissionControlLabels {
     }
 
     /// The Dock reports the hover-expanded thumbnails at their new places as they start sliding
-    /// sideways, in a reading asked at `asked`: slide the labels there on its timing, from where they are now.
-    private func noticeShift(from old: [BarLayout], to new: [BarLayout], at time: TimeInterval, asked: TimeInterval) {
+    /// sideways: slide the labels there on its timing, from where they are now.
+    private func noticeShift(from old: [BarLayout], to new: [BarLayout], at time: TimeInterval) {
         guard let before = old.first, let after = new.first,
               let dx = Self.sidewaysShift(from: before, to: after, byThumbnails: magnification.follows(after)),
               abs(dx) > 0.5
@@ -877,29 +877,8 @@ final class MissionControlLabels {
         }
         // A slide still running leaves the labels short of the places it was taking them to.
         let left = shift.map { $0.slide.offset(at: time) } ?? 0
-        let sliding = Self.sidewaysSlide(from: left - dx, changedAt: time, asked: asked,
-                                         frameDuration: clock.frameDuration, pans: magnification.doesNotMagnify(after))
-        shift = (after.screen, sliding.slide, sliding.leads)
+        shift = (after.screen, TimedShift(timing: DockMotion.shift, reference: time, from: left - dx))
         record(String(format: "shift %.1f", dx), at: time)
-    }
-
-    /// About when the Dock made a change that a reading asked at `asked` first shows: midway between the answer to
-    /// the reading before, at `previousAnswer` (0 with none), and that ask.
-    static func changeTime(previousAnswer: TimeInterval, asked: TimeInterval) -> TimeInterval {
-        previousAnswer > 0 ? (previousAnswer + asked) / 2 : asked
-    }
-
-    /// The labels' slide sideways `from` an offset to their new places, as the Dock moves a bar's thumbnails there
-    /// about `changedAt`, in a reading asked at `asked`. A bar that `pans`, its thumbnails known not to magnify,
-    /// slides on the pan's timing, fitted against the labels' frames as they reach the screen: no lead. Others
-    /// slide on the shift's, half a frame early.
-    static func sidewaysSlide(from: CGFloat, changedAt: TimeInterval, asked: TimeInterval,
-                              frameDuration: TimeInterval, pans: Bool) -> (slide: TimedShift, leads: Bool) {
-        guard pans else { return (TimedShift(timing: DockMotion.shift, reference: changedAt, from: from), true) }
-        // A reading more than a frame after the one before is this app held up, not the Dock: in the one filmed,
-        // a pan began within the last frame before the ask.
-        let reference = max(changedAt, asked - frameDuration)
-        return (TimedShift(timing: DockMotion.Unmagnified.pan, reference: reference, from: from), false)
     }
 
     /// How far every caption of a bar moved sideways between two measurements of the same bar, or nil
@@ -998,7 +977,7 @@ final class MissionControlLabels {
         if let dock {
             // A close from the keyboard or a click: the Dock reports the bar fully up at once.
             if retraction <= Self.restSlack, dock >= 0.9 {
-                return startClose(reading: reading)
+                return startClose(reference: readingChangedAt, frameTime: frameTime)
             }
             return .at(dock)
         }
@@ -1007,7 +986,7 @@ final class MissionControlLabels {
         // The bar has gone. From rest, a close is starting: Ctrl+Up drops Mission Control from the
         // Dock's Accessibility as the bar starts up. From off the screen, one has ended.
         if sawBar, retraction <= Self.restSlack, !restingLayouts.isEmpty {
-            return startClose(reading: reading)
+            return startClose(reference: readingChangedAt, frameTime: frameTime)
         }
         return .gone
     }
@@ -1051,33 +1030,17 @@ final class MissionControlLabels {
     }
 
     /// Closes timed from a click, which the Dock may still report at rest just after: never turned back.
-    static let clickTimings = [DockMotion.choose, DockMotion.clickClose, DockMotion.Unmagnified.clickClose]
+    static let clickTimings = [DockMotion.choose, DockMotion.clickClose]
 
-    /// Starts replaying the close the Dock has just begun, which `reading` is the first to show.
-    private func startClose(reading: DockReader.Reading) -> Placement {
-        let bar = restingLayouts.first
-        let expanded = (bar?.frame.height ?? 0) > Self.expandedBarHeight
-        let timed = Self.keyboardClose(
-            expanded: expanded, unmagnified: bar.map(magnification.doesNotMagnify) ?? false,
-            changedAt: readingChangedAt, previousAnswer: previousReadingTime, asked: reading.time)
-        let close = TimedSlide(timing: timed.timing, reference: timed.reference, from: retraction, to: 1)
+    /// Starts replaying the close the Dock has just begun, timed from `reference`.
+    private func startClose(reference: TimeInterval, frameTime: TimeInterval) -> Placement {
+        let expanded = (restingLayouts.first?.frame.height ?? 0) > Self.expandedBarHeight
+        let close = TimedSlide(timing: expanded ? DockMotion.closeExpanded : DockMotion.close,
+                               reference: reference, from: retraction, to: 1)
         slide = close
-        record(expanded ? "close expanded" : "close", at: timed.reference)
+        record(expanded ? "close expanded" : "close", at: reference)
         settleOverlayLevel(at: "closing", choosing: false)
         return .slide(close)
-    }
-
-    /// How to replay a close the Dock reports at once, as from the keyboard, in a reading asked at `asked`: a bar
-    /// of names or thumbnails on its timing from `changedAt`, between that reading's answer and the one before's,
-    /// at `previousAnswer`. A bar of thumbnails known not to magnify, `unmagnified`, on its own, from midway between
-    /// the one before's answer and the ask, as a pan is: the Dock, closing, can take a frame to answer.
-    static func keyboardClose(
-        expanded: Bool, unmagnified: Bool, changedAt: TimeInterval, previousAnswer: TimeInterval, asked: TimeInterval
-    ) -> (timing: DockMotion.Timing, reference: TimeInterval) {
-        if unmagnified {
-            return (DockMotion.Unmagnified.close, changeTime(previousAnswer: previousAnswer, asked: asked))
-        }
-        return (expanded ? DockMotion.closeExpanded : DockMotion.close, changedAt)
     }
 
     private static func interpolate(_ from: CGRect, _ to: CGRect, _ progress: CGFloat) -> CGRect {

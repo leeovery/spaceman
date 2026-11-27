@@ -93,30 +93,6 @@ enum DockMotion {
     /// when each caption went under it: evenly over 0.2s, three starting 42-54ms after the click and
     /// two later, at 94 and 134ms, so this starts with the earlier ones.
     static let zoom = Timing(delay: 0.048, duration: 0.196, curve: CubicBezier(0, 0, 1, 1))
-
-    /// A hover-expanded bar of thumbnails that don't magnify moves on timings of its own. Each was fitted on macOS
-    /// 26.7 with 15 desktops on a 2560pt screen, filmed at 60 frames a second, and in a hand run at 30.
-    enum Unmagnified {
-        /// The Dock panning the bar sideways, as it does one too wide for the screen to bring the pointer's end
-        /// into view, or back once the pointer leaves: timed from about when the Dock moved the thumbnails, as a
-        /// reading first shows them at their new places. Fitted to five pans of 33-454pt: one timing whatever the
-        /// distance, each pan starting within 3ms of the others, so within 3pt of the captions but for the first
-        /// frame or two of the longest, up to 11pt.
-        static let pan = Timing(delay: 0.011, duration: 0.234, curve: CubicBezier(0.224, 0.229, 0.264, 0.977))
-        /// The captions riding the grow onto the bar, from the names down under the thumbnails, timed from the
-        /// pointer entering it: along and down alike. macOS's ride starts about 30ms after, or, on some first
-        /// expansions and those by hand, 13-21ms later and stuttering. Fitted to ten expansions of both kinds to keep
-        /// the worst least: within 14pt of the 112pt ride down. Fitted to either kind alone, it would follow that
-        /// within 5.5pt and miss the other by up to 26pt.
-        static let ride = Timing(delay: 0.002, duration: 0.247, curve: CubicBezier(0.538, 0.036, 0.404, 0.714))
-        /// Closing the bar from the keyboard, timed from about when the Dock moved it, as for `pan`. Fitted to
-        /// three closes: to within 7pt of the captions' rise, but for one the Dock held back a frame, 11pt.
-        static let close = Timing(delay: 0.042, duration: 0.250, curve: CubicBezier(0.579, 0.524, 0.363, 0.753))
-        /// Closing the bar by a click off the bars, timed from the click, as `clickClose`. Fitted to five clicks
-        /// sent by a script and two by hand: to within 4pt of the captions' rise for three, 9-13pt for two the
-        /// Dock held back, 17-22pt for those by hand, whose closes ran sooner after the release the app sees.
-        static let clickClose = Timing(delay: 0.032, duration: 0.220, curve: CubicBezier(0.677, 0.459, 0.396, 0.649))
-    }
 }
 
 /// A replayed move of one label, as an offset in points from where it is placed (y down, as in

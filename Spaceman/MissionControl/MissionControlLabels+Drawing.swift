@@ -70,8 +70,9 @@ extension MissionControlLabels {
             let bar = growing?.to ?? held ?? predicted ?? measured
             // Placed as with the bar in; the overlay moves them all up by the retraction.
             let barTop = bar.screen.minY
+            // Started half a frame early, as for `slide`.
             let sliding = shift.flatMap {
-                $0.screen == bar.screen ? $0.slide.earlier(by: $0.leads ? clock.frameDuration / 2 : 0) : nil
+                $0.screen == bar.screen ? $0.slide.earlier(by: clock.frameDuration / 2) : nil
             }
             let offset = barTop - bar.frame.minY
             noteHover(on: bar, at: frameTime)
@@ -80,8 +81,6 @@ extension MissionControlLabels {
             let phase = growing.map { Self.growPhase(at: frameTime, reference: $0.reference) }
             let magnifies = matching && magnification.magnifies(bar)
             let drawing = magnifies ? stripDrawing(for: bar, shown: shown, at: frameTime) : nil
-            let ride = Self.rideTiming(magnifies: magnifies, unmagnified: magnification.doesNotMagnify(bar),
-                                       frameDuration: clock.frameDuration)
             for caption in bar.captions {
                 // A label macOS draws no caption for goes; in the grow from the names, every one stays until
                 // macOS's captions under the thumbnails not hovered have gone.
@@ -131,7 +130,7 @@ extension MissionControlLabels {
                 label.barHeight = bar.frame.height
                 label.shift = sliding
                 label.grow = dragged ?? reflowing ?? growing.flatMap { running in
-                    growMove(of: label, for: caption, from: source, in: running, ride: ride)
+                    growMove(of: label, for: caption, from: source, in: running, magnifies: magnifies)
                 }
                 if case .riding(let worn, _, _) = source, let move = label.grow, let fill = worn.look.barColor {
                     label.lookPadding = (Self.ridePadding(travel: move.from.dx), fill)
@@ -150,11 +149,11 @@ extension MissionControlLabels {
     }
 
     /// `label`'s move with the bar of names growing into thumbnails as `running` has it, `caption` its caption
-    /// there: from where it sat on the names to where it is placed, on the `ride`'s timing, started its lead early.
+    /// there: from where it sat on the names to where it is placed, timed as macOS's captions are on a bar that
+    /// `magnifies`, else as the thumbnails are, started half a frame early, as for `slide`.
     private func growMove(
         of label: MissionControlLabel, for caption: Caption, from source: LookSource,
-        in running: (screen: CGRect, reference: TimeInterval, from: BarLayout, to: BarLayout),
-        ride: (timing: DockMotion.Timing, lead: TimeInterval)
+        in running: (screen: CGRect, reference: TimeInterval, from: BarLayout, to: BarLayout), magnifies: Bool
     ) -> TimedMove? {
         let from: CGVector
         if case .riding(_, let leaving, _) = source, let look = label.look, let end = label.lookOrigin {
@@ -166,18 +165,10 @@ extension MissionControlLabels {
             }
             from = CGVector(dx: leaving.centre.x - caption.centre.x, dy: leaving.centre.y - caption.centre.y)
         }
-        return TimedMove(timing: ride.timing, reference: running.reference, from: from).earlier(by: ride.lead)
-    }
-
-    /// How labels ride the grow onto a bar, and how much early: as macOS's captions do on a bar that `magnifies`,
-    /// as labelled in its looks, or one of thumbnails known not to magnify, `unmagnified`, each ride fitted against
-    /// the labels' frames as they reach the screen, so with no lead. Else as the thumbnails grow, half a frame
-    /// early, as for `slide`.
-    static func rideTiming(magnifies: Bool, unmagnified: Bool,
-                           frameDuration: TimeInterval) -> (timing: DockMotion.Timing, lead: TimeInterval) {
-        if magnifies { return (DockMotion.growCaptions, 0) }
-        if unmagnified { return (DockMotion.Unmagnified.ride, 0) }
-        return (DockMotion.expand, frameDuration / 2)
+        let move = TimedMove(timing: magnifies ? DockMotion.growCaptions : DockMotion.expand,
+                             reference: running.reference, from: from)
+        // The captions' ride was fitted against the labels' frames as they reach the screen: no lead.
+        return magnifies ? move : move.earlier(by: clock.frameDuration / 2)
     }
 
     /// How far a label riding the grow onto a magnifying bar reaches past its look either side, `travel` across:
