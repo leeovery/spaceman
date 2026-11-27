@@ -150,7 +150,7 @@ extension MissionControlLabels {
 
     /// Returns ManagedSpaceIDs (as strings) for the display with `displayUUID`, in visual order.
     /// With one display, or with displays sharing their spaces, that display's spaces.
-    static func orderedSpaceIDs(displayUUID: String?) -> [String] {
+    fileprivate static func orderedSpaceIDs(displayUUID: String?) -> [String] {
         let conn = _CGSDefaultConnection()
         guard let spacesRef = CGSCopyManagedDisplaySpaces(conn) else { return [] }
         guard let displays = spacesRef.takeRetainedValue() as? [[String: Any]] else { return [] }

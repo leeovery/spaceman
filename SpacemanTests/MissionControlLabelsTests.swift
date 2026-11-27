@@ -1222,33 +1222,6 @@ final class MissionControlLabelsTests: XCTestCase {
 
     /// A session that ended with a bar grown into thumbnails, as when one is clicked, opens the next on its bar of
     /// names, as macOS does: the slide in shows every name, not the none a magnifying bar shows unhovered.
-    /// The Dock was slow to report the thumbnails of a grow from the pointer entering between two names: the labels
-    /// rode two frames towards thumbnails in the middle of the screen, 290pt right of where the Dock put them. The
-    /// same entry gives the same thumbnails: those it grew into before are taken, moved with the pointer; else those
-    /// of the last grow, with the nearest name's thumbnail under the pointer.
-    func testAGrowBeforeTheDockReportsGoesWhereTheSameEntryWentBefore() throws {
-        let names = thumbnailBar(height: 40)
-        let lastGrown = thumbnailBar()
-        let gapX = (names.buttons[5].frame.maxX + names.buttons[6].frame.minX) / 2 + 5
-        let nearest = try XCTUnwrap(MissionControlLabels.grownLayout(
-            entering: names, at: gapX, learned: [:], lastGrown: lastGrown))
-        XCTAssertEqual(nearest.buttons[6].frame.midX, gapX, accuracy: 0.001)
-        let key = try XCTUnwrap(MissionControlLabels.grownKey(entering: names, at: gapX))
-        XCTAssertEqual(key, "1|16|6")
-        let grown = thumbnailBar().offsetBy(dx: -300)
-        let learned = [key: GrownLayout(layout: grown, enteredAt: gapX - 4)]
-        let again = try XCTUnwrap(MissionControlLabels.grownLayout(
-            entering: names, at: gapX, learned: learned, lastGrown: lastGrown))
-        XCTAssertEqual(again.buttons[0].frame.minX, grown.buttons[0].frame.minX + 4, accuracy: 0.001)
-        // Past the names, all in the middle as last time; with no grow seen, none.
-        let past = names.buttons[15].frame.maxX + 10
-        XCTAssertNil(MissionControlLabels.grownKey(entering: names, at: past))
-        XCTAssertEqual(MissionControlLabels.grownLayout(entering: names, at: past, learned: learned,
-                                                        lastGrown: lastGrown)?.buttons[0].frame,
-                       lastGrown.buttons[0].frame)
-        XCTAssertNil(MissionControlLabels.grownLayout(entering: names, at: gapX, learned: [:], lastGrown: nil))
-    }
-
     func testMissionControlOpensOnEachBarsNamesThoughTheLastSessionEndedGrown() {
         let names = thumbnailBar(height: 40)
         let grownElsewhere = thumbnailBar(on: builtIn)
@@ -1571,81 +1544,44 @@ final class MissionControlLabelsTests: XCTestCase {
         return (frames[5].maxX + frames[6].minX) / 2
     }
 
-    private func shown(
-        at x: CGFloat, velocity: CGFloat, gaps: [CGFloat] = [], on bar: BarLayout? = nil, keeping kept: Int? = nil
-    ) -> ShownLabels {
-        ShownLabels.on(bar ?? magnifiedBar, magnifies: true, pointer: CGPoint(x: x, y: 60),
-                       approach: .of(pointer: velocity, gaps: gaps, frameDuration: frameDuration), keeping: kept)
+    private func shown(at x: CGFloat, speed: CGFloat, keeping kept: Int? = nil) -> ShownLabels {
+        ShownLabels.on(magnifiedBar, magnifies: true, pointer: CGPoint(x: x, y: 60),
+                       reach: ShownLabels.reach(speed: speed, frameDuration: frameDuration), keeping: kept)
     }
 
-    /// At 1200pt a second the pointer covers 80pt in four frames: that far short of a gap's middle and heading for
-    /// it, both thumbnails' labels are drawn. Past it, heading on, only the hovered one's: the one it left is kept for
-    /// a few frames by the hover's trail.
-    func testAFastPointerHeadingForAGapShowsBothThumbnailsLabelsFourFramesAhead() {
+    /// At 1200pt a second the pointer covers 40pt in two frames: within that of a gap's middle, macOS may caption
+    /// either thumbnail by the time the labels reach the screen.
+    func testAFastPointerNearAGapsMiddleShowsBothThumbnailsLabels() {
         let gap = gapMiddleAfterSixth
-        XCTAssertEqual(shown(at: gap - 10, velocity: 1200), .only(5, also: [6]))
-        XCTAssertEqual(magnifiedBar.captions.filter(shown(at: gap - 10, velocity: 1200).shows).map(\.spaceID),
+        XCTAssertEqual(shown(at: gap - 10, speed: 1200), .only(5, also: [6]))
+        XCTAssertEqual(shown(at: gap + 10, speed: 1200), .only(6, also: [5]))
+        XCTAssertEqual(magnifiedBar.captions.filter(shown(at: gap - 10, speed: 1200).shows).map(\.spaceID),
                        ["6", "7"])
-        XCTAssertEqual(shown(at: gap - 79.5, velocity: 1200), .only(5, also: [6]))
-        XCTAssertEqual(shown(at: gap - 80.5, velocity: 1200), .only(5))
-        XCTAssertEqual(shown(at: gap + 10, velocity: 1200), .only(6))
-        XCTAssertEqual(shown(at: gap + 10, velocity: -1200), .only(6, also: [5]))
-        XCTAssertEqual(shown(at: gap - 10, velocity: -1200), .only(5))
+        XCTAssertEqual(shown(at: gap - 40.5, speed: 1200), .only(5))
+        XCTAssertEqual(shown(at: middle(of: 5, on: magnifiedBar), speed: 1200), .only(5))
     }
 
     func testAStillPointerShowsOnlyTheHoveredLabelHoweverNearTheGap() {
-        XCTAssertEqual(shown(at: gapMiddleAfterSixth - 0.5, velocity: 0), .only(5))
-        XCTAssertEqual(shown(at: gapMiddleAfterSixth, velocity: 0), .only(6))
+        XCTAssertEqual(shown(at: gapMiddleAfterSixth - 0.5, speed: 0), .only(5))
+        XCTAssertEqual(shown(at: gapMiddleAfterSixth, speed: 0), .only(6))
     }
 
-    func testAMovingPointerWithinThreePointsOfAGapShowsBothLabelsEitherWay() {
+    func testTheReachScalesWithSpeedAndIsAtLeastThreePoints() {
+        XCTAssertEqual(ShownLabels.reach(speed: 0, frameDuration: frameDuration), 0)
+        XCTAssertEqual(ShownLabels.reach(speed: 30, frameDuration: frameDuration), 3)
+        XCTAssertEqual(ShownLabels.reach(speed: 600, frameDuration: frameDuration), 20, accuracy: 0.001)
+        XCTAssertEqual(ShownLabels.reach(speed: 1200, frameDuration: frameDuration), 40, accuracy: 0.001)
+        XCTAssertEqual(ShownLabels.reach(speed: 600, frameDuration: 1.0 / 120), 10, accuracy: 0.001)
         let gap = gapMiddleAfterSixth
-        XCTAssertEqual(shown(at: gap - 2.5, velocity: 30), .only(5, also: [6]))
-        XCTAssertEqual(shown(at: gap + 2.5, velocity: 30), .only(6, also: [5]))
-        XCTAssertEqual(shown(at: gap - 3, velocity: 30), .only(5))
+        XCTAssertEqual(shown(at: gap - 2.5, speed: 30), .only(5, also: [6]))
+        XCTAssertEqual(shown(at: gap - 3, speed: 30), .only(5))
+        XCTAssertEqual(shown(at: gap - 19.5, speed: 600), .only(5, also: [6]))
+        XCTAssertEqual(shown(at: gap - 20.5, speed: 600), .only(5))
     }
 
-    /// Near an end of the bar its thumbnails slide towards the pointer: a gap coming at 800pt a second to meet a
-    /// pointer at 1200 is crossed four frames on from 133pt short of it.
-    func testAGapSlidingTowardsThePointerIsCoveredSooner() {
-        let gap = gapMiddleAfterSixth
-        var sliding = Array(repeating: CGFloat(0), count: magnifiedBar.buttons.count - 1)
-        sliding[5] = -800
-        XCTAssertEqual(shown(at: gap - 130, velocity: 1200, gaps: sliding), .only(5, also: [6]))
-        XCTAssertEqual(shown(at: gap - 130, velocity: 1200), .only(5))
-        XCTAssertEqual(shown(at: gap - 136, velocity: 1200, gaps: sliding), .only(5))
-    }
-
-    /// A pointer so fast four frames take it past the next two gaps covers both.
-    func testAPointerFastEnoughToCrossTwoGapsCoversBoth() {
-        XCTAssertEqual(shown(at: middle(of: 5, on: magnifiedBar), velocity: 4000), .only(5, also: [6, 7]))
-    }
-
-    /// Sweeps over a gap as Mission Control was filmed doing, the end slide included, its thumbnails read by the Dock a
-    /// frame late. The labels drawn at each frame reach the screen a frame on; macOS swaps its caption as soon as
-    /// 8ms after the pointer crosses. The new thumbnail's label is drawn from at least two frames before, by the
-    /// frames' times: a label drawn for the very frame of the swap was seen to reach the screen a frame late.
-    func testEveryCrossingIsCoveredAtLeastTwoFramesBeforeMacOSsSwap() {
-        let gap = gapMiddleAfterSixth
-        for (pointer, slide) in [(1200, 0), (1200, -800), (2300, 0), (-1500, 0), (-1500, 800), (200, 0)]
-            as [(CGFloat, CGFloat)] {
-            for phase in [0, 0.25, 0.5, 0.75] {
-                let crossing = 0.3 + phase * frameDuration
-                let gaps = Array(repeating: slide, count: magnifiedBar.buttons.count - 1)
-                let place = pointer > 0 ? 6 : 5
-                var coveredFrom: TimeInterval?
-                for tick in (0..<40).map({ Double($0) * frameDuration }) where tick + frameDuration < crossing {
-                    let moved = slide * CGFloat(tick - crossing)
-                    let x = gap + moved + (pointer - slide) * CGFloat(tick - crossing)
-                    let read = magnifiedBar.offsetBy(dx: moved - slide * CGFloat(frameDuration))
-                    let covers = shown(at: x, velocity: pointer, gaps: gaps, on: read).places.contains(place)
-                    coveredFrom = covers ? coveredFrom ?? tick + frameDuration : nil
-                }
-                let swap = crossing + 0.008
-                let lead = coveredFrom.map { (swap - $0) / frameDuration } ?? 0
-                XCTAssertGreaterThanOrEqual(lead, 2, "at \(pointer)pt/s, the gap at \(slide), phase \(phase)")
-            }
-        }
+    /// A pointer so fast its reach spans a whole thumbnail covers the gaps either side of it.
+    func testAReachOverBothGapsShowsTheThumbnailsBesideEach() {
+        XCTAssertEqual(shown(at: middle(of: 5, on: magnifiedBar), speed: 3000), .only(5, also: [4, 6]))
     }
 
     /// The hover moving from the sixth thumbnail to the seventh, then the pointer far past the gap: the sixth's label
@@ -1657,7 +1593,7 @@ final class MissionControlLabelsTests: XCTestCase {
         trail.note(6, at: frameDuration)
         let farPast = middle(of: 6, on: magnifiedBar)
         let shownByFrame = (1...5).map { frame in
-            shown(at: farPast, velocity: 0,
+            shown(at: farPast, speed: 0,
                   keeping: trail.kept(at: Double(frame) * frameDuration, frameDuration: frameDuration))
         }
         XCTAssertEqual(shownByFrame, [.only(6, also: [5]), .only(6, also: [5]), .only(6, also: [5]), .only(6),
@@ -1681,34 +1617,11 @@ final class MissionControlLabelsTests: XCTestCase {
             pace.note(CGPoint(x: CGFloat(x), y: 60), at: Double(frame) * frameDuration)
         }
         XCTAssertEqual(pace.speed, 600, accuracy: 0.001)
-        XCTAssertEqual(pace.velocity, 600, accuracy: 0.001)
-        var leftwards = PointerPace()
-        for (frame, x) in [120, 110, 100].enumerated() {
-            leftwards.note(CGPoint(x: CGFloat(x), y: 60), at: Double(frame) * frameDuration)
-        }
-        XCTAssertEqual(leftwards.velocity, -600, accuracy: 0.001)
         for frame in 3...6 { pace.note(CGPoint(x: 120, y: 60), at: Double(frame) * frameDuration) }
         XCTAssertEqual(pace.speed, 0)
         pace.note(CGPoint(x: 200, y: 60), at: 7 * frameDuration)
         pace.note(nil, at: 8 * frameDuration)
         XCTAssertEqual(pace.speed, 0)
-    }
-
-    /// The Dock repeats a reading for a frame now and then: gaps' velocities compare readings at least 30ms apart.
-    func testAGapsVelocityComesFromReadingsAtLeastThirtyMillisecondsApart() {
-        var pace = GapPace()
-        pace.note(magnifiedBar, at: 0)
-        XCTAssertEqual(pace.velocities, [])
-        pace.note(magnifiedBar.offsetBy(dx: -10), at: frameDuration)
-        XCTAssertEqual(pace.velocities, [])
-        pace.note(magnifiedBar.offsetBy(dx: -10), at: 2 * frameDuration)
-        let velocities = pace.velocities
-        XCTAssertEqual(velocities.count, magnifiedBar.buttons.count - 1)
-        XCTAssertEqual(velocities[5], -10 / CGFloat(2 * frameDuration), accuracy: 0.001)
-        pace.note(magnifiedBar.offsetBy(dx: -10), at: 2 * frameDuration)
-        XCTAssertEqual(pace.velocities[5], -10 / CGFloat(2 * frameDuration), accuracy: 0.001)
-        pace.note(thumbnailBar(count: 15), at: 3 * frameDuration)
-        XCTAssertEqual(pace.velocities, [])
     }
 
     func testTheRecordingListsEveryLabelShown() {
@@ -2221,7 +2134,7 @@ final class MissionControlLabelsTests: XCTestCase {
                    growReference: TimeInterval? = 10) -> Bool {
             Labels.wearsPill(current: current, source: source, at: time, growReference: growReference)
         }
-        let drops = DockMotion.growCaptions.time(toReach: Labels.rideHalfway)
+        let drops = DockMotion.growCaptions.time(toReach: Labels.ridePillGone)
         XCTAssertGreaterThan(drops, 0.117)
         XCTAssertLessThan(drops, 0.134)
         XCTAssertTrue(wears(riding, at: 10 + drops - 0.001))
@@ -2229,52 +2142,6 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertFalse(wears(riding, current: false, at: 10.05))
         XCTAssertTrue(wears(.captured(found), at: 10.2))
         XCTAssertTrue(wears(.captured(found), at: 30, growReference: nil))
-    }
-
-    /// Riding down, a label leaves the names row's bar for the grown bar's, which is bluer towards its foot, where the
-    /// strip was captured: halfway, it turns from the names row's look to the strip's, the pill going with it.
-    func testPastHalfwayARidingLabelIsDrawnFromTheStrip() throws {
-        let names = thumbnailBar(height: 40)
-        var looks = CaptionLooks()
-        _ = looks.finish(looks.capture(of: [names], attempt: 1),
-                         CaptionLooks.Result(found: try found(names.captions, on: names)), moved: false)
-        var withStrip = strips()
-        let kept = try strip()
-        withStrip.adopt([magnifiedKey: kept])
-        let drawing = drawn(&withStrip, hovered: 5, at: 10)
-        let caption = magnifiedBar.captions[2], leaving = names.captions[2]
-        func source(pastHalfway: Bool, strip: StripDrawing) -> MissionControlLabels.LookSource {
-            MissionControlLabels.lookSource(for: caption, on: magnifiedBar, strip: strip, leaving: (names, leaving),
-                                            pastHalfway: pastHalfway, looks: &looks)
-        }
-        guard case .riding = source(pastHalfway: false, strip: drawing) else { return XCTFail("not riding") }
-        guard case .ridingStrip(let onto, let worn, let from) = source(pastHalfway: true, strip: drawing)
-        else { return XCTFail("not drawn from the strip past halfway") }
-        XCTAssertTrue(onto.image === kept.image)
-        XCTAssertTrue(worn.exact)
-        XCTAssertEqual(from, leaving.centre)
-        XCTAssertTrue(source(pastHalfway: true, strip: drawing).rides)
-        // With no strip yet, it rides on in the names row's look.
-        var unstripped = strips(background: "sea")
-        guard case .riding = source(pastHalfway: true, strip: drawn(&unstripped, hovered: 5, at: 10))
-        else { return XCTFail("no strip to turn to") }
-        typealias Labels = MissionControlLabels
-        let halfway = DockMotion.growCaptions.time(toReach: Labels.rideHalfway)
-        XCTAssertFalse(Labels.pastRideHalfway(at: 10 + halfway - 0.001, reference: 10))
-        XCTAssertTrue(Labels.pastRideHalfway(at: 10 + halfway, reference: 10))
-    }
-
-    /// Turned to the strip's look halfway, a riding label's name stays on the path it had in the names row's look.
-    func testARidingLabelsNameKeepsItsPathWhicheverLookItWears() throws {
-        let look = try XCTUnwrap(try look(top: 7.5).plain)
-        let leaving = CGPoint(x: 511, y: 20)
-        let landing = try strip().landing(underThumbnailAt: 229, inkOffset: 0.4)
-        let start = MissionControlLabels.rideStart(of: look, leaving: leaving, barTop: 0)
-        let end = MissionControlLabels.rideEnd(
-            of: look, leaving: leaving, centre: CGPoint(x: 229, y: 95), landing: landing, barTop: 0)
-        let offset = MissionControlLabels.rideOffset(of: look, leaving: leaving, landing: landing, barTop: 0)
-        XCTAssertEqual(offset.dx, start.x - end.x, accuracy: 0.001)
-        XCTAssertEqual(offset.dy, start.y - end.y, accuracy: 0.001)
     }
 
     /// A label riding the grow in its names row look starts where that caption was, and lands with its name where
@@ -2657,29 +2524,6 @@ final class MissionControlLabelsTests: XCTestCase {
         magnification.know([primaryInfo])
         _ = magnification.learn(from: magnifiedBar, read: 10, pointer: overSixth, at: 10)
         return magnification
-    }
-
-    /// The Dock answers nothing until Mission Control's bar has landed, about 210ms in: the first opening after a
-    /// launch slides in on the bar of names kept on disk, while its screen and spaces are as they were.
-    func testABarOfNamesSurvivesTheTripToDiskWhileItsScreenAndSpacesStayTheSame() throws {
-        let names = thumbnailBar(height: 40)
-        let kept = NamesRowStore.stored(names)
-        let read = try XCTUnwrap(NamesRowStore.decode(try XCTUnwrap(NamesRowStore.encode(kept))))
-        XCTAssertEqual(read, kept)
-        let screen = ScreenInfo(frame: primary, displayID: 7, uuid: "PRIMARY", scale: 2)
-        let layout = try XCTUnwrap(NamesRowStore.layout(read, on: screen, spaceIDs: names.spaceIDs))
-        XCTAssertEqual(layout.displayID, 7)
-        XCTAssertEqual(layout.frame, names.frame)
-        XCTAssertEqual(layout.buttons.map(\.frame), names.buttons.map(\.frame))
-        XCTAssertEqual(layout.buttons.map(\.title), names.buttons.map(\.title))
-        let matched = layout.rematched(labelsUnnamed: true, storedNames: [:])
-        XCTAssertEqual(matched.captions.map(\.centre), names.captions.map(\.centre))
-        // Another screen, or spaces since added or reordered: none.
-        let moved = ScreenInfo(frame: builtIn, displayID: 7, uuid: "PRIMARY", scale: 2)
-        XCTAssertNil(NamesRowStore.layout(read, on: moved, spaceIDs: names.spaceIDs))
-        XCTAssertNil(NamesRowStore.layout(read, on: screen, spaceIDs: names.spaceIDs + ["99"]))
-        XCTAssertNil(NamesRowStore.layout(read, on: screen, spaceIDs: names.spaceIDs.reversed()))
-        XCTAssertEqual(NamesRowStore.file(display: "PRIMARY", screen: primary.size), "PRIMARY-2560x1440")
     }
 
     func testWhatIsLearnedOfABarSurvivesTheTripToDiskByDisplayUUID() throws {

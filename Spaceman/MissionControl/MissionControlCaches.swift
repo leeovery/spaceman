@@ -3,7 +3,7 @@
 //  Spaceman
 //
 //  What the Mission Control labels keep in Spaceman's caches folder, so the first session after a launch is
-//  labelled from its first frame: the captions' looks, which bars magnify and each display's bar of names.
+//  labelled from its first frame: the captions' looks and which bars magnify.
 //
 
 import AppKit
@@ -199,77 +199,5 @@ enum BarMagnificationStore {
         guard let stored = try? PropertyListDecoder().decode(Stored.self, from: data), stored.version == version
         else { return nil }
         return stored.magnifies.mapValues { $0 ? .magnifies : .doesNotMagnify }
-    }
-}
-
-// MARK: - Bars of names
-
-/// Each display's bar of names as the Dock last reported it, a file a display, by its UUID and its screen's size: the
-/// Dock answers no Accessibility request until Mission Control's bar has landed, about 210ms in (filmed on macOS 26.7),
-/// so the first opening after a launch slides the labels in on these, as later ones do on the last session's.
-enum NamesRowStore {
-
-    private static let folder = "NamesRows"
-    private static let version = 1
-
-    /// A bar of names as written: its screen, its frame and each thumbnail's title and frame, in AX coordinates,
-    /// and the spaces they showed.
-    struct Stored: Codable, Equatable {
-        struct Thumbnail: Codable, Equatable {
-            let title: String
-            let frame: CGRect
-        }
-
-        var version = NamesRowStore.version
-        let screen: CGRect
-        let frame: CGRect
-        let thumbnails: [Thumbnail]
-        let spaceIDs: [String]
-    }
-
-    /// The file a display's bar of names is kept in: its UUID and its screen's size in points.
-    static func file(display: String, screen: CGSize) -> String {
-        CaptionLookStore.file(display: display, screen: screen)
-    }
-
-    /// `bar` as written, at rest.
-    static func stored(_ bar: BarLayout) -> Stored {
-        let rest = bar.atRest()
-        return Stored(screen: rest.screen, frame: rest.frame,
-                      thumbnails: rest.buttons.map { Stored.Thumbnail(title: $0.title, frame: $0.frame) },
-                      spaceIDs: rest.spaceIDs)
-    }
-
-    static func save(_ stored: Stored, file: String) {
-        CacheFiles.write(file, in: folder) { encode(stored) }
-    }
-
-    static func encode(_ stored: Stored) -> Data? {
-        try? PropertyListEncoder().encode(stored)
-    }
-
-    /// Reads every bar kept, by file, and hands them to `done` on the main thread.
-    static func load(_ done: @escaping ([String: Stored]) -> Void) {
-        CacheFiles.readAll(in: folder, decode: decode, done: done)
-    }
-
-    static func decode(_ data: Data) -> Stored? {
-        guard let stored = try? PropertyListDecoder().decode(Stored.self, from: data), stored.version == version
-        else { return nil }
-        return stored
-    }
-
-    /// The bar `stored` holds, on `screen` as it is now, whose spaces are `spaceIDs` in order: nil unless the screen
-    /// is where it was and its spaces are the ones the bar showed. Its captions are matched to names when a session
-    /// starts.
-    static func layout(_ stored: Stored, on screen: ScreenInfo, spaceIDs: [String]) -> BarLayout? {
-        guard stored.screen == screen.frame, !spaceIDs.isEmpty, stored.spaceIDs == spaceIDs,
-              stored.thumbnails.count == spaceIDs.count
-        else { return nil }
-        let element = AXUIElementCreateApplication(getpid())
-        return BarLayout(
-            bar: nil, firstButton: nil, frame: stored.frame, firstButtonX: nil, screen: screen.frame,
-            displayID: screen.displayID, captions: [],
-            buttons: stored.thumbnails.map { (element, $0.title, $0.frame) }, spaceIDs: spaceIDs)
     }
 }
