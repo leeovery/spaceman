@@ -49,7 +49,8 @@ extension MissionControlLabels {
         else {
             if Self.closesThumbnails(clickedAt: point, bars: restingLayouts) {
                 noteMotion()
-                slide = TimedSlide(timing: DockMotion.clickClose, reference: time, from: 0, to: 1)
+                let unmagnified = restingLayouts.first.map(magnification.doesNotMagnify) ?? false
+                slide = TimedSlide(timing: Self.clickClose(unmagnified: unmagnified), reference: time, from: 0, to: 1)
                 record("close expanded from a click", at: time)
                 settleOverlayLevel(at: "closing", choosing: false)
             }
@@ -73,6 +74,11 @@ extension MissionControlLabels {
         // showing until the zoom covers them: so do the labels, kept to this desktop since they came in.
         zoom = (bar.screen, button.frame, time)
         record("chose \(button.title)", at: time)
+    }
+
+    /// The timing of a click closing the thumbnails: of a bar of them known not to magnify, `unmagnified`, or others.
+    static func clickClose(unmagnified: Bool) -> DockMotion.Timing {
+        unmagnified ? DockMotion.Unmagnified.clickClose : DockMotion.clickClose
     }
 
     /// Whether a click at `point` closes Mission Control from `bars` as a click on a window or the desktop does,
