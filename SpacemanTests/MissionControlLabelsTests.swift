@@ -1389,14 +1389,144 @@ final class MissionControlLabelsTests: XCTestCase {
     }
 
     /// The strip slides in from the screen's edge, leaving the pointer beyond its end thumbnail: macOS
-    /// draws no caption there.
+    /// draws no caption more than half the bar's 25pt gap past it.
     func testPastEitherEndOfTheStripNoThumbnailIsHovered() {
         let frames = magnifiedBar.buttons.map(\.frame)
-        XCTAssertNil(ShownLabels.hoveredThumbnail(frames, at: frames[0].minX - 0.5))
-        XCTAssertEqual(ShownLabels.hoveredThumbnail(frames, at: frames[0].minX), 0)
-        XCTAssertEqual(ShownLabels.hoveredThumbnail(frames, at: frames[15].maxX - 0.5), 15)
-        XCTAssertNil(ShownLabels.hoveredThumbnail(frames, at: frames[15].maxX))
+        XCTAssertNil(ShownLabels.hoveredThumbnail(frames, at: frames[0].minX - 12.5 - 0.5))
+        XCTAssertEqual(ShownLabels.hoveredThumbnail(frames, at: frames[0].minX - 12.5), 0)
+        XCTAssertEqual(ShownLabels.hoveredThumbnail(frames, at: frames[15].maxX + 12.5 - 0.5), 15)
+        XCTAssertNil(ShownLabels.hoveredThumbnail(frames, at: frames[15].maxX + 12.5))
         XCTAssertEqual(ShownLabels.on(magnifiedBar, magnifies: true, pointer: CGPoint(x: 10, y: 60)), .none)
+    }
+
+    /// 16 thumbnails 127pt wide, 24pt apart, the first at x 73.
+    private var barGappedBy24: BarLayout {
+        var bar = thumbnailBar()
+        for index in bar.buttons.indices {
+            bar.buttons[index].frame.origin.x = 73 + CGFloat(index) * (127 + 24)
+        }
+        return bar
+    }
+
+    /// Recorded: the pointer resting at x 70, left of the first thumbnail's edge at 73, had macOS caption it.
+    func testTheFirstThumbnailsSpanReachesHalfTheGapPastItsLeftEdge() {
+        let bar = barGappedBy24
+        let frames = bar.buttons.map(\.frame)
+        XCTAssertEqual(ShownLabels.on(bar, magnifies: true, pointer: CGPoint(x: 70, y: 60)), .only(0))
+        XCTAssertEqual(ShownLabels.on(bar, magnifies: true, pointer: CGPoint(x: 40, y: 60)), .none)
+        XCTAssertEqual(ShownLabels.hoveredThumbnail(frames, at: 61), 0)
+        XCTAssertNil(ShownLabels.hoveredThumbnail(frames, at: 60.5))
+    }
+
+    func testTheLastThumbnailsSpanReachesHalfTheGapPastItsRightEdge() {
+        let bar = barGappedBy24
+        let edge = bar.buttons[15].frame.maxX
+        XCTAssertEqual(ShownLabels.on(bar, magnifies: true, pointer: CGPoint(x: edge + 3, y: 60)), .only(15))
+        XCTAssertEqual(ShownLabels.on(bar, magnifies: true, pointer: CGPoint(x: edge + 33, y: 60)), .none)
+        let frames = bar.buttons.map(\.frame)
+        XCTAssertEqual(ShownLabels.hoveredThumbnail(frames, at: edge + 11.5), 15)
+        XCTAssertNil(ShownLabels.hoveredThumbnail(frames, at: edge + 12))
+    }
+
+    func testALoneThumbnailsSpanStopsAtItsEdges() {
+        let frame = CGRect(x: 73, y: 8, width: 127, height: 77)
+        XCTAssertEqual(ShownLabels.hoveredThumbnail([frame], at: 73), 0)
+        XCTAssertNil(ShownLabels.hoveredThumbnail([frame], at: 72.5))
+        XCTAssertNil(ShownLabels.hoveredThumbnail([frame], at: 200))
+    }
+
+    private let frameDuration: TimeInterval = 1.0 / 60
+    private var gapMiddleAfterSixth: CGFloat {
+        let frames = magnifiedBar.buttons.map(\.frame)
+        return (frames[5].maxX + frames[6].minX) / 2
+    }
+
+    private func shown(at x: CGFloat, speed: CGFloat, keeping kept: Int? = nil) -> ShownLabels {
+        ShownLabels.on(magnifiedBar, magnifies: true, pointer: CGPoint(x: x, y: 60),
+                       reach: ShownLabels.reach(speed: speed, frameDuration: frameDuration), keeping: kept)
+    }
+
+    /// At 1200pt a second the pointer covers 40pt in two frames: within that of a gap's middle, macOS may caption
+    /// either thumbnail by the time the labels reach the screen.
+    func testAFastPointerNearAGapsMiddleShowsBothThumbnailsLabels() {
+        let gap = gapMiddleAfterSixth
+        XCTAssertEqual(shown(at: gap - 10, speed: 1200), .only(5, also: [6]))
+        XCTAssertEqual(shown(at: gap + 10, speed: 1200), .only(6, also: [5]))
+        XCTAssertEqual(magnifiedBar.captions.filter(shown(at: gap - 10, speed: 1200).shows).map(\.spaceID),
+                       ["6", "7"])
+        XCTAssertEqual(shown(at: gap - 40.5, speed: 1200), .only(5))
+        XCTAssertEqual(shown(at: middle(of: 5, on: magnifiedBar), speed: 1200), .only(5))
+    }
+
+    func testAStillPointerShowsOnlyTheHoveredLabelHoweverNearTheGap() {
+        XCTAssertEqual(shown(at: gapMiddleAfterSixth - 0.5, speed: 0), .only(5))
+        XCTAssertEqual(shown(at: gapMiddleAfterSixth, speed: 0), .only(6))
+    }
+
+    func testTheReachScalesWithSpeedAndIsAtLeastThreePoints() {
+        XCTAssertEqual(ShownLabels.reach(speed: 0, frameDuration: frameDuration), 0)
+        XCTAssertEqual(ShownLabels.reach(speed: 30, frameDuration: frameDuration), 3)
+        XCTAssertEqual(ShownLabels.reach(speed: 600, frameDuration: frameDuration), 20, accuracy: 0.001)
+        XCTAssertEqual(ShownLabels.reach(speed: 1200, frameDuration: frameDuration), 40, accuracy: 0.001)
+        XCTAssertEqual(ShownLabels.reach(speed: 600, frameDuration: 1.0 / 120), 10, accuracy: 0.001)
+        let gap = gapMiddleAfterSixth
+        XCTAssertEqual(shown(at: gap - 2.5, speed: 30), .only(5, also: [6]))
+        XCTAssertEqual(shown(at: gap - 3, speed: 30), .only(5))
+        XCTAssertEqual(shown(at: gap - 19.5, speed: 600), .only(5, also: [6]))
+        XCTAssertEqual(shown(at: gap - 20.5, speed: 600), .only(5))
+    }
+
+    /// A pointer so fast its reach spans a whole thumbnail covers the gaps either side of it.
+    func testAReachOverBothGapsShowsTheThumbnailsBesideEach() {
+        XCTAssertEqual(shown(at: middle(of: 5, on: magnifiedBar), speed: 3000), .only(5, also: [4, 6]))
+    }
+
+    /// The hover moving from the sixth thumbnail to the seventh, then the pointer far past the gap: the sixth's label
+    /// stays in the frame of the crossing and the two after, then goes.
+    func testTheLabelTheHoverLeftIsKeptForExactlyTwoFramesAfterTheCrossing() {
+        var trail = HoverTrail()
+        trail.note(5, at: 0)
+        XCTAssertNil(trail.kept(at: 0, frameDuration: frameDuration))
+        trail.note(6, at: frameDuration)
+        let farPast = middle(of: 6, on: magnifiedBar)
+        let shownByFrame = (1...5).map { frame in
+            shown(at: farPast, speed: 0,
+                  keeping: trail.kept(at: Double(frame) * frameDuration, frameDuration: frameDuration))
+        }
+        XCTAssertEqual(shownByFrame, [.only(6, also: [5]), .only(6, also: [5]), .only(6, also: [5]), .only(6),
+                                      .only(6)])
+    }
+
+    func testTheHoverLeavingTheThumbnailsKeepsNoLabel() {
+        var trail = HoverTrail()
+        trail.note(5, at: 0)
+        trail.note(nil, at: frameDuration)
+        XCTAssertNil(trail.kept(at: frameDuration, frameDuration: frameDuration))
+        trail.note(nil, at: 2 * frameDuration)
+        trail.note(6, at: 3 * frameDuration)
+        XCTAssertNil(trail.kept(at: 3 * frameDuration, frameDuration: frameDuration))
+    }
+
+    func testThePointersSpeedComesFromItsLastFewFramesAndFallsToNoneAtRest() {
+        var pace = PointerPace()
+        XCTAssertEqual(pace.speed, 0)
+        for (frame, x) in [100, 110, 120].enumerated() {
+            pace.note(CGPoint(x: CGFloat(x), y: 60), at: Double(frame) * frameDuration)
+        }
+        XCTAssertEqual(pace.speed, 600, accuracy: 0.001)
+        for frame in 3...6 { pace.note(CGPoint(x: 120, y: 60), at: Double(frame) * frameDuration) }
+        XCTAssertEqual(pace.speed, 0)
+        pace.note(CGPoint(x: 200, y: 60), at: 7 * frameDuration)
+        pace.note(nil, at: 8 * frameDuration)
+        XCTAssertEqual(pace.speed, 0)
+    }
+
+    func testTheRecordingListsEveryLabelShown() {
+        let bar = magnifiedBar
+        XCTAssertEqual(MissionControlLabels.shownRecord(bar: bar, shown: .only(9, also: [8])), "display 1 hovered 9+10")
+        XCTAssertEqual(MissionControlLabels.shownRecord(bar: bar, shown: .only(4)), "display 1 hovered 5")
+        XCTAssertEqual(MissionControlLabels.shownRecord(bar: bar, shown: .all), "display 1 all")
+        XCTAssertEqual(MissionControlLabels.shownRecord(bar: bar, shown: .none), "display 1 none")
     }
 
     func testWithThePointerOffAMagnifyingBarNoLabelShows() {

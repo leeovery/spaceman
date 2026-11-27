@@ -40,7 +40,8 @@ extension MissionControlLabels {
                 $0.screen == bar.screen ? $0.slide.earlier(by: clock.frameDuration / 2) : nil
             }
             let offset = barTop - bar.frame.minY
-            let shown = shownLabels(on: bar)
+            noteHover(on: bar, at: frameTime)
+            let shown = shownLabels(on: bar, at: frameTime)
             shownByBar.append((bar, shown))
             let ridingGrow = growing.map { frameTime < $0.reference + DockMotion.expand.delay + Self.growCaptionFade }
             let magnifies = matching && magnification.magnifies(bar)
@@ -180,9 +181,19 @@ extension MissionControlLabels {
         return dressed
     }
 
-    /// Which of `bar`'s labels are drawn: on a bar of thumbnails that magnifies, only the hovered one's.
-    func shownLabels(on bar: BarLayout) -> ShownLabels {
-        ShownLabels.on(bar, magnifies: magnification.magnifies(bar), pointer: pointer?.point)
+    /// Which of `bar`'s labels are drawn in the frame reaching the screen at `time`: on a bar of thumbnails that
+    /// magnifies, the hovered one's, with those beside a gap the pointer is about to cross and the one it just left.
+    func shownLabels(on bar: BarLayout, at time: TimeInterval) -> ShownLabels {
+        let kept = hoverTrails[BarMagnification.key(of: bar)]?.kept(at: time, frameDuration: clock.frameDuration)
+        return ShownLabels.on(
+            bar, magnifies: magnification.magnifies(bar), pointer: pointer?.point,
+            reach: ShownLabels.reach(speed: pointerPace.speed, frameDuration: clock.frameDuration), keeping: kept)
+    }
+
+    /// Notes the thumbnail hovered on `bar`, if any, in the frame reaching the screen at `time`.
+    private func noteHover(on bar: BarLayout, at time: TimeInterval) {
+        let hovered = ShownLabels.on(bar, magnifies: magnification.magnifies(bar), pointer: pointer?.point).hovered
+        hoverTrails[BarMagnification.key(of: bar), default: HoverTrail()].note(hovered, at: time)
     }
 
     /// Whether `caption`'s space is the current one, which has its pill: the space of the thumbnail the

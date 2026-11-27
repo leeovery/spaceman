@@ -26,22 +26,28 @@ extension MissionControlLabels {
     }
 
     /// Notes in the debug motion recording, when it is on and it changes, which labels each bar shows: all,
-    /// or on a magnifying bar the hovered thumbnail's, by its space, or none.
+    /// or on a magnifying bar those shown about the hovered thumbnail, by their spaces left to right, or none.
     func recordShown(_ shownByBar: [(bar: BarLayout, shown: ShownLabels)], at frameTime: TimeInterval) {
         guard MissionControlMotionRecorder.isEnabled else { return }
-        let line = "labels shown: " + shownByBar.map { bar, shown in
-            let which: String
-            switch shown {
-            case .all: which = "all"
-            case .none: which = "none"
-            case .only(let place):
-                which = "hovered " + (bar.spaceIDs.indices.contains(place) ? bar.spaceIDs[place] : "place \(place + 1)")
-            }
-            return "display \(bar.displayID) \(which)"
-        }.joined(separator: ", ")
+        let line = "labels shown: "
+            + shownByBar.map { Self.shownRecord(bar: $0.bar, shown: $0.shown) }.joined(separator: ", ")
         guard line != lastShownRecord else { return }
         lastShownRecord = line
         record(line, at: frameTime)
+    }
+
+    /// "display <id> all", "display <id> none", or "display <id> hovered 9+10": the spaces whose labels `bar` shows.
+    static func shownRecord(bar: BarLayout, shown: ShownLabels) -> String {
+        let which: String
+        switch shown {
+        case .all: which = "all"
+        case .none: which = "none"
+        case .only:
+            which = "hovered " + shown.places.map {
+                bar.spaceIDs.indices.contains($0) ? bar.spaceIDs[$0] : "place \($0 + 1)"
+            }.joined(separator: "+")
+        }
+        return "display \(bar.displayID) \(which)"
     }
 
     /// "display <id> thumbnails <x>,<width> ...": each thumbnail's left edge and width as the Dock last reported

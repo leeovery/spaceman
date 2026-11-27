@@ -27,7 +27,7 @@ extension MissionControlLabels {
         else { return }
         for (index, bar) in measured.enumerated() where magnification.magnifies(bar) {
             guard Self.retraction(bar: bar.frame, screen: bar.screen) <= Self.restSlack,
-                  case .only(let place) = shownLabels(on: bar), bar.buttons.indices.contains(place),
+                  let place = shownLabels(on: bar, at: now).hovered, bar.buttons.indices.contains(place),
                   let key = captionStrips.key(for: bar), let background = captionStrips.background(forKey: key)
             else { continue }
             let current = bar.spaceIDs.indices.contains(place) && Self.isCurrent(
@@ -101,8 +101,7 @@ extension MissionControlLabels {
     /// bar is rendered in the strip's style ahead of its thumbnail's hover, once a session and again when the style
     /// changes.
     func stripDrawing(for bar: BarLayout, shown: ShownLabels, at time: TimeInterval) -> StripDrawing {
-        var hovered: Int?
-        if case .only(let place) = shown { hovered = place }
+        let hovered = shown.hovered
         let screen = CaptionLooks.screenKey(bar.screen), height = bar.frame.height
         let drawing = captionStrips.drawing(
             for: bar, hovered: hovered, colors: { self.captionLooks.measuredColors(onScreen: screen, height: height) },

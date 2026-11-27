@@ -102,40 +102,139 @@ struct BarMagnification {
 /// Which of a bar's labels are drawn.
 enum ShownLabels: Equatable {
     case all
-    /// Only the label of the thumbnail at this place: the hovered one, on a magnifying bar.
-    case only(Int)
+    /// Only the label of the thumbnail at this place, the hovered one on a magnifying bar, and those at the places
+    /// `also`: either side of a gap the pointer is about to cross, and the one it has just left, so whichever macOS
+    /// captions in the frames the pointer is ahead of the labels is covered.
+    case only(Int, also: Set<Int> = [])
     /// None: the pointer is off a magnifying bar.
     case none
 
-    /// A bar's labels: all of them, unless its thumbnails `magnifies`. Then only the hovered thumbnail's,
-    /// while `pointer` (AX coordinates) is within the bar's height with the bar at rest.
-    static func on(_ bar: BarLayout, magnifies: Bool, pointer: CGPoint?) -> ShownLabels {
+    /// How many frames the pointer is ahead of the labels: macOS moves its caption the instant the pointer crosses
+    /// the middle of a gap, and a label drawn from the pointer reaches the screen up to two frames later.
+    static let framesBehind = 2
+    /// The least distance either side of a gap's middle in which a moving pointer shows both thumbnails' labels.
+    static let leastReach: CGFloat = 3
+
+    /// A bar's labels: all of them, unless its thumbnails `magnifies`. Then the hovered thumbnail's, while
+    /// `pointer` (AX coordinates) is within the bar's height; with both thumbnails beside each gap whose middle is
+    /// within `reach` of the pointer, and the one at `kept`, which the hover has just left.
+    static func on(
+        _ bar: BarLayout, magnifies: Bool, pointer: CGPoint?, reach: CGFloat = 0, keeping kept: Int? = nil
+    ) -> ShownLabels {
         guard magnifies else { return .all }
         let top = bar.screen.minY
+        let frames = bar.buttons.map(\.frame)
         guard let pointer, (top...(top + bar.frame.height)).contains(pointer.y),
-              let place = hoveredThumbnail(bar.buttons.map(\.frame), at: pointer.x)
+              let place = hoveredThumbnail(frames, at: pointer.x)
         else { return .none }
-        return .only(place)
+        let near = frames.indices.dropLast().filter { abs(gapMiddle(after: $0, in: frames) - pointer.x) < reach }
+        var also = Set(near.flatMap { [$0, $0 + 1] })
+        if let kept, frames.indices.contains(kept) { also.insert(kept) }
+        also.remove(place)
+        return .only(place, also: also)
+    }
+
+    /// How far either side of a gap's middle a pointer moving at `speed` (points a second) shows both thumbnails'
+    /// labels: as far as it moves in `framesBehind` frames of `frameDuration`, and at least `leastReach`. None for a
+    /// pointer at rest, which shows only the hovered thumbnail's.
+    static func reach(speed: CGFloat, frameDuration: TimeInterval) -> CGFloat {
+        guard speed > 0 else { return 0 }
+        return max(leastReach, speed * CGFloat(frameDuration) * CGFloat(framesBehind))
     }
 
     /// The thumbnail of `frames`, left to right, whose span out to the middle of the gap on each side
     /// holds `x`. macOS moves the caption on as the pointer crosses the middle of a gap: from there on it
-    /// is the next thumbnail's. Past the outer edge of either end thumbnail, none.
+    /// is the next thumbnail's. The end thumbnails' spans reach as far outwards, half the bar's gap past their
+    /// outer edges; past those, none.
     static func hoveredThumbnail(_ frames: [CGRect], at x: CGFloat) -> Int? {
-        frames.indices.first { index in
-            let left = index > frames.startIndex ? (frames[index - 1].maxX + frames[index].minX) / 2
-                : frames[index].minX
-            let right = index < frames.endIndex - 1 ? (frames[index].maxX + frames[index + 1].minX) / 2
-                : frames[index].maxX
-            return left <= x && x < right
-        }
+        guard let first = frames.first, let last = frames.last,
+              first.minX - gap(frames.prefix(2)) / 2 <= x, x < last.maxX + gap(frames.suffix(2)) / 2
+        else { return nil }
+        return frames.indices.dropLast().first { x < gapMiddle(after: $0, in: frames) } ?? frames.endIndex - 1
+    }
+
+    /// The middle of the gap between the thumbnail at `index` of `frames` and the next.
+    private static func gapMiddle(after index: Int, in frames: [CGRect]) -> CGFloat {
+        (frames[index].maxX + frames[index + 1].minX) / 2
+    }
+
+    /// The gap between the two thumbnails of `pair`: none for a lone thumbnail.
+    private static func gap(_ pair: ArraySlice<CGRect>) -> CGFloat {
+        guard pair.count == 2, let left = pair.first, let right = pair.last else { return 0 }
+        return max(0, right.minX - left.maxX)
+    }
+
+    /// The hovered thumbnail's place, on a magnifying bar.
+    var hovered: Int? {
+        guard case .only(let place, _) = self else { return nil }
+        return place
+    }
+
+    /// Every place whose label is drawn on a magnifying bar, left to right.
+    var places: [Int] {
+        guard case .only(let place, let also) = self else { return [] }
+        return also.union([place]).sorted()
     }
 
     func shows(_ caption: Caption) -> Bool {
         switch self {
         case .all: return true
-        case .only(let place): return caption.index == place
+        case .only(let place, let also): return caption.index == place || also.contains(caption.index)
         case .none: return false
         }
+    }
+}
+
+/// How fast the pointer moves across the bars, from where it was over the last few frames.
+struct PointerPace {
+
+    /// How far back the pointer's places count towards its speed: three frames at 60 a second.
+    static let window: TimeInterval = 0.05
+
+    private var samples: [(time: TimeInterval, x: CGFloat)] = []
+
+    /// Notes the pointer at `point` (AX coordinates), or nowhere, at `time`: once a frame, moved or not, so a
+    /// pointer come to rest has its speed fall to none.
+    mutating func note(_ point: CGPoint?, at time: TimeInterval) {
+        guard let point else {
+            samples = []
+            return
+        }
+        samples.removeAll { $0.time < time - Self.window || $0.time > time }
+        samples.append((time, point.x))
+    }
+
+    /// The pointer's speed across the bars, in points a second, either way.
+    var speed: CGFloat {
+        guard let first = samples.first, let last = samples.last, last.time > first.time else { return 0 }
+        return abs(last.x - first.x) / CGFloat(last.time - first.time)
+    }
+}
+
+/// A magnifying bar's hovered thumbnail as last drawn, and the one the hover last left with the frame it left in:
+/// that one's label stays for `keptFrames` frames more, as macOS may caption it in the frames the pointer is ahead.
+struct HoverTrail: Equatable {
+
+    static let keptFrames = 2
+
+    private(set) var hovered: Int?
+    private(set) var left: Int?
+    private(set) var leftAt: TimeInterval = 0
+
+    /// Notes `place` hovered, or none, in the frame reaching the screen at `time`. The hover moving on to another
+    /// thumbnail keeps the one it left; moving off the thumbnails keeps none.
+    mutating func note(_ place: Int?, at time: TimeInterval) {
+        guard place != hovered else { return }
+        left = place == nil ? nil : hovered
+        leftAt = time
+        hovered = place
+    }
+
+    /// The place whose label is kept in the frame reaching the screen at `time`, frames lasting `frameDuration`:
+    /// the one the hover left, in the frame it left in and the `keptFrames` after. Counted by time, half a frame
+    /// spare, so a frame drawn a little late still counts as the one it is.
+    func kept(at time: TimeInterval, frameDuration: TimeInterval) -> Int? {
+        guard let left, time - leftAt < (Double(Self.keptFrames) + 0.5) * frameDuration else { return nil }
+        return left
     }
 }

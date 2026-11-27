@@ -116,6 +116,10 @@ final class MissionControlLabels {
     var reflow: Reflow?
     /// The pointer's last place, in Accessibility coordinates, and when it moved there.
     private(set) var pointer: (time: TimeInterval, point: CGPoint)?
+    /// How fast the pointer moves across the bars, noted each frame.
+    private(set) var pointerPace = PointerPace()
+    /// Each magnifying bar's hover as last drawn, by `BarMagnification.key(of:)`, for the label the hover just left.
+    var hoverTrails: [String: HoverTrail] = [:]
     /// When the window server last said Mission Control had finished closing (system uptime).
     var missionControlEndedAt: TimeInterval?
 
@@ -432,6 +436,8 @@ final class MissionControlLabels {
         layoutsVersion = 0
         reader.begin(dockPID: pid, screens: ScreenInfo.current(), labelsUnnamed: labelStyle.labelsUnnamed)
         pointer = (trackingStarted, Self.axPoint(NSEvent.mouseLocation))
+        pointerPace = PointerPace()
+        hoverTrails = [:]
         clock.start()
         tick()
     }
@@ -588,6 +594,7 @@ final class MissionControlLabels {
         recordPointer()
         recordBars()
         followPointer(at: now)
+        pointerPace.note(pointer?.point, at: now)
         // Re-measure only while nothing moves, so a measurement never holds up a slide.
         reader.request(
             remeasure: retraction <= 0 && swipe.state == .idle && slide == nil, magnification: magnification)
