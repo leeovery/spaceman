@@ -317,6 +317,15 @@ struct StripDrawing {
 
 // MARK: - On disk
 
+extension CaptionStrip {
+
+    /// Whether `other` would be written as this is: measured alike over the same background, pixel for pixel.
+    func holdsSame(as other: CaptionStrip) -> Bool {
+        scale == other.scale && top == other.top && baseline == other.baseline && lineOffset == other.lineOffset
+            && text == other.text && background == other.background && CacheFiles.samePixels(image, other.image)
+    }
+}
+
 /// The strips kept in Spaceman's caches folder, one file each, read and written off the main thread.
 enum CaptionStripStore {
 

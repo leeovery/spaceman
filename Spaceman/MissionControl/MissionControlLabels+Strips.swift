@@ -79,7 +79,8 @@ extension MissionControlLabels {
             thumbnailStayed: CaptionStrips.thumbnailStayed(at: shot.capture.thumbnail, now: frame))
     }
 
-    /// Takes in a strip's capture, and writes its strip to disk once two captures agree on it.
+    /// Takes in a strip's capture, and writes its strip to disk once two captures agree on it, unless the file holds
+    /// it already.
     private func finishStripCapture(
         _ capture: CaptionStrips.Capture, _ result: MissionControlCaptionLook.StripCapture?, motion: Int,
         thumbnailStayed: Bool
@@ -90,7 +91,10 @@ extension MissionControlLabels {
         guard outcome != .stale else { return }
         isCapturingStrip = false
         record("strip capture \(capture.key) hovered \(capture.place + 1): \(outcome)")
-        guard outcome == .kept, let strip = captionStrips.kept[capture.key] else { return }
+        guard outcome == .kept, let strip = captionStrips.kept[capture.key],
+              writtenStrips[capture.key]?.holdsSame(as: strip) != true
+        else { return }
+        writtenStrips[capture.key] = strip
         CaptionStripStore.save(strip, key: capture.key)
     }
 

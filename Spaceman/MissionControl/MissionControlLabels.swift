@@ -149,6 +149,10 @@ final class MissionControlLabels {
     /// last rendered in this session.
     var stripNames = StripNames()
     var preparedStyles: [String: CaptionStrip.TextStyle] = [:]
+    /// What each file of looks, by `CaptionLookStore.file`, and of a strip, by its key, last held, as read or
+    /// written: written again only once that changes.
+    var writtenLooks: [String: CaptionLooks.ScreenLooks] = [:]
+    var writtenStrips: [String: CaptionStrip] = [:]
     /// Counts frames that found the bars moving, or off their places, so a strip's capture can tell whether they
     /// moved while it ran; and since when they have been still. Thumbnails resizing don't count.
     var barMotionCount = 0
@@ -305,7 +309,10 @@ final class MissionControlLabels {
         swipe.onDrop = { [weak self] point in self?.handleDrop(at: point) }
 
         if Self.spacesBarIsInDock {
-            CaptionStripStore.load { [weak self] stored in self?.captionStrips.adopt(stored) }
+            CaptionStripStore.load { [weak self] stored in
+                self?.writtenStrips.merge(stored) { written, _ in written }
+                self?.captionStrips.adopt(stored)
+            }
             BarMagnificationStore.load { [weak self] stored in self?.magnification.adopt(stored) }
             CaptionLookStore.load { [weak self] stored in self?.adoptLooks(stored) }
         }

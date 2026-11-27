@@ -2594,6 +2594,48 @@ final class MissionControlLabelsTests: XCTestCase {
         assertColor(try pixels(read.image)[10][400], barColor)
     }
 
+    /// `image` laid out as it is, with the pixel `x`, `y` from its bottom-left painted `rgb`, or none painted.
+    private func redrawn(_ image: CGImage, painting rgb: (Int, Int, Int)? = nil, x: Int = 0, y: Int = 0)
+        throws -> CGImage {
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: image.width, height: image.height, bitsPerComponent: image.bitsPerComponent,
+            bytesPerRow: image.bytesPerRow, space: try XCTUnwrap(image.colorSpace),
+            bitmapInfo: image.bitmapInfo.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        if let rgb {
+            context.setFillColor(cgColor(rgb))
+            context.fill(CGRect(x: x, y: y, width: 1, height: 1))
+        }
+        return try XCTUnwrap(context.makeImage())
+    }
+
+    /// Images are told apart by their pixels as they are, never encoded to compare.
+    func testImagesHoldTheSamePixelsOnlyIfEveryPixelIsTheSame() throws {
+        let image = try strip().image
+        XCTAssertTrue(CacheFiles.samePixels(image, image))
+        XCTAssertTrue(CacheFiles.samePixels(image, try strip().image))
+        XCTAssertTrue(CacheFiles.samePixels(image, try redrawn(image)))
+        XCTAssertFalse(CacheFiles.samePixels(image, try redrawn(image, painting: textColor, x: 400, y: 10)))
+        XCTAssertFalse(CacheFiles.samePixels(image, try strip(height: 30).image))
+    }
+
+    /// Each session's captures keep a strip again: its file is written only once what it would hold changes.
+    func testAStripIsWrittenAgainOnlyOnceWhatItWouldHoldChanges() throws {
+        let written = try strip()
+        XCTAssertTrue(written.holdsSame(as: try strip()))
+        XCTAssertFalse(written.holdsSame(as: try strip(background: "desert")))
+        XCTAssertFalse(written.holdsSame(as: try strip(text: (120, 120, 130))))
+        XCTAssertFalse(written.holdsSame(as: try strip(lineOffset: 1)))
+        let repainted = CaptionStrip(
+            image: try redrawn(written.image, painting: textColor, x: 400, y: 10), scale: written.scale,
+            top: written.top, baseline: written.baseline, lineOffset: written.lineOffset, text: written.text,
+            background: written.background)
+        XCTAssertFalse(written.holdsSame(as: repainted))
+        let data = try XCTUnwrap(CaptionStripStore.encode(written))
+        let read = try XCTUnwrap(CaptionStripStore.decode(data))
+        XCTAssertTrue(read.holdsSame(as: try XCTUnwrap(CaptionStripStore.decode(data))))
+    }
+
     /// Strips written while the current space's pill was measured on magnifying bars still draw, without it.
     func testAStripWrittenWithAPillStillLoads() throws {
         let data = try XCTUnwrap(CaptionStripStore.encode(try strip()))
@@ -2697,6 +2739,34 @@ final class MissionControlLabelsTests: XCTestCase {
         assertColor(try components(try XCTUnwrap(look.textColor)), namesRowText)
         assertColor(try components(try XCTUnwrap(look.barColor)), (10, 10, 40))
         XCTAssertNil(CaptionLooks().screenLooks(primaryKey))
+    }
+
+    /// Every kept capture keeps its screens' looks again: a screen's file is written only once what it would hold
+    /// changes.
+    func testAScreensLooksAreWrittenAgainOnlyOnceWhatTheyWouldHoldChanges() throws {
+        func screenLooks(over background: String = "hills", top: CGFloat = 7.5) throws -> CaptionLooks.ScreenLooks {
+            try XCTUnwrap(try namesRowLooks(over: background, top: top).screenLooks(primaryKey))
+        }
+        let written = try screenLooks()
+        XCTAssertTrue(written.holdsSame(as: try screenLooks()))
+        XCTAssertFalse(written.holdsSame(as: try screenLooks(over: "desert")))
+        XCTAssertFalse(written.holdsSame(as: try screenLooks(top: 8)))
+        XCTAssertFalse(written.holdsSame(as: CaptionLooks.ScreenLooks(
+            background: written.background, entries: Array(written.entries.prefix(1)))))
+        let first = try XCTUnwrap(written.entries.first)
+        let plain = try XCTUnwrap(first.look.plain)
+        var repainted = NativeCaptionLook(
+            plain: NativeCaptionLook.Variant(frame: plain.frame, top: plain.top,
+                                             image: try redrawn(plain.image, painting: (255, 0, 0)),
+                                             baseline: plain.baseline),
+            current: first.look.current, wasCurrent: first.look.wasCurrent, summary: first.look.summary)
+        repainted.textColor = first.look.textColor
+        repainted.barColor = first.look.barColor
+        XCTAssertTrue(first.look.holdsSame(as: first.look))
+        XCTAssertFalse(first.look.holdsSame(as: repainted))
+        let data = try XCTUnwrap(CaptionLookStore.encode(written))
+        let read = try XCTUnwrap(CaptionLookStore.decode(data))
+        XCTAssertTrue(read.holdsSame(as: try XCTUnwrap(CaptionLookStore.decode(data))))
     }
 
     /// The first session after a launch: the names row's labels are drawn from their first frame, with no capture.

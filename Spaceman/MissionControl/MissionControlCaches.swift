@@ -65,9 +65,51 @@ enum CacheFiles {
     static func image(png: Data) -> CGImage? {
         CGImageSourceCreateWithData(png as CFData, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
     }
+
+    /// Whether `first` and `second` hold the same pixels, laid out alike: compared as they are, never encoded. An
+    /// image read from a file may be laid out otherwise than the one captured, and counts as different.
+    static func samePixels(_ first: CGImage, _ second: CGImage) -> Bool {
+        if first === second { return true }
+        guard first.width == second.width, first.height == second.height,
+              first.bitsPerComponent == second.bitsPerComponent, first.bitsPerPixel == second.bitsPerPixel,
+              first.bytesPerRow == second.bytesPerRow, first.bitmapInfo == second.bitmapInfo,
+              first.colorSpace == second.colorSpace,
+              let one = first.dataProvider?.data, let two = second.dataProvider?.data
+        else { return false }
+        return one as Data == two as Data
+    }
 }
 
 // MARK: - Looks
+
+extension CaptionLooks.ScreenLooks {
+
+    /// Whether `other` would be written as these are: the same background and looks, pixel for pixel.
+    func holdsSame(as other: Self) -> Bool {
+        background == other.background && entries.count == other.entries.count
+            && zip(entries, other.entries).allSatisfy { mine, theirs in
+                mine.exact == theirs.exact && mine.name == theirs.name && mine.look.holdsSame(as: theirs.look)
+            }
+    }
+}
+
+extension NativeCaptionLook {
+
+    /// Whether `other` would be written as this is.
+    func holdsSame(as other: Self) -> Bool {
+        wasCurrent == other.wasCurrent && summary == other.summary && textColor == other.textColor
+            && barColor == other.barColor && Variant.same(plain, other.plain) && Variant.same(current, other.current)
+    }
+}
+
+extension NativeCaptionLook.Variant {
+
+    static func same(_ first: Self?, _ second: Self?) -> Bool {
+        guard let first, let second else { return first == nil && second == nil }
+        return first.frame == second.frame && first.top == second.top && first.baseline == second.baseline
+            && CacheFiles.samePixels(first.image, second.image)
+    }
+}
 
 /// The captions' looks kept on disk, a file a screen, by display and size, with what the screen showed behind them.
 enum CaptionLookStore {
