@@ -293,7 +293,7 @@ final class MissionControlLabels {
             guard let self else { return }
             self.currentSpaceIDs = Self.currentSpaceIDs()
             self.closedBackgroundsReadAt = nil
-            if !self.isTracking { self.readBackgroundsIfDue() }
+            self.readBackgroundsSoon()
             if self.isTracking, self.keptToThisDesktop, self.zoom == nil {
                 self.overlay.showOnEveryDesktop(true)
                 self.keptToThisDesktop = false
@@ -451,11 +451,27 @@ final class MissionControlLabels {
     /// the system is busy opening it, and nothing should hold up the labels' first frame.
     private func readBackgroundsIfDue() {
         let now = ProcessInfo.processInfo.systemUptime
-        guard Self.spacesBarIsInDock, now - (closedBackgroundsReadAt ?? -.infinity) >= Self.backgroundsInterval,
+        guard Self.spacesBarIsInDock,
+              Self.backgroundsDue(at: now, readAt: closedBackgroundsReadAt, tracking: isTracking),
               MissionControlLabelStyle.current() == .nativeLook
         else { return }
         closedBackgroundsReadAt = now
         closedBackgrounds = CaptionLooks.currentBackgrounds()
+    }
+
+    /// Reads what the screens show once this turn of the run loop is done, if it is due then and the labels are on: a
+    /// turn that ends tracking can begin it again straight away, as a fresh open does.
+    private func readBackgroundsSoon() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.timer != nil else { return }
+            self.readBackgroundsIfDue()
+        }
+    }
+
+    /// Whether what the screens show is due to be read at `now`, last read at `readAt`, or not since a Space switch,
+    /// nor ever (nil): every `backgroundsInterval`, and never while Mission Control is being tracked.
+    static func backgroundsDue(at now: TimeInterval, readAt: TimeInterval?, tracking: Bool) -> Bool {
+        !tracking && now - (readAt ?? -.infinity) >= backgroundsInterval
     }
 
     func beginTracking() {
@@ -570,7 +586,7 @@ final class MissionControlLabels {
         let known = Self.knownLayout(of: bar.buttons.count, on: bar, in: expandedLayoutsByCount)
         let start = Self.growStart(at: frameTime, frameDuration: clock.frameDuration, entered: pending.time,
                                    reported: reported != nil, known: known != nil,
-                                   magnifies: (reported ?? known).map(magnification.magnifies) ?? false)
+                                   magnifies: Self.growMagnifies(onto: reported, known: known, by: magnification))
         guard start != .wait else { return }
         pendingGrow = nil
         guard start == .start, let point = pointer?.point, bar.frame.contains(point), slide == nil else { return }
@@ -595,6 +611,13 @@ final class MissionControlLabels {
         }
         grow = (bar.screen, pending.time, bar, to)
         record("grow", at: pending.time + DockMotion.expand.delay)
+    }
+
+    /// Whether a bar of names grows into thumbnails known to magnify, by `magnification`, whatever the labels' style:
+    /// as the Dock has `reported` them, or failing that as an earlier expansion laid them out (`known`).
+    static func growMagnifies(onto reported: BarLayout?, known: BarLayout?, by magnification: BarMagnification)
+        -> Bool {
+        (reported ?? known).map(magnification.magnifies) ?? false
     }
 
     /// Where `count` thumbnails went when the Dock last laid them out on `bar`'s display, of `layouts`
@@ -667,6 +690,8 @@ final class MissionControlLabels {
         retraction = 1
         swipe.settle()
         logOutcome("Spaces Bar not found")
+        // A space chosen in Mission Control may show another wallpaper.
+        if closedBackgroundsReadAt == nil { readBackgroundsSoon() }
     }
 
     /// Where the labels go on a frame.

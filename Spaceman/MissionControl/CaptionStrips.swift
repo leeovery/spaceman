@@ -15,13 +15,15 @@ import AppKit
 struct CaptionStrips {
 
     /// A capture under way: its session, the strip it is for, the thumbnail hovered and its frame, and how many times
-    /// the hovered thumbnail had changed when it started.
+    /// the hovered thumbnail had changed when it started; and what its screen shows behind the bar, which its strip
+    /// and what it saw of the caption are kept with: as this session found it, until read as the screen is shot.
     struct Capture {
         let session: Int
         let key: String
         let place: Int
         let thumbnail: CGRect
         let hoverChanges: Int
+        var background: String
     }
 
     /// What a capture came to. All but `kept` wait `retryDelay` before the next.
@@ -205,11 +207,12 @@ struct CaptionStrips {
     func capture(
         key: String, hovered place: Int, thumbnail: CGRect, at time: TimeInterval, steadySince: TimeInterval
     ) -> Capture? {
-        guard backgroundOf[key] != nil, !captured.contains(key), budgets[key, default: Budget()].isLeft,
+        guard let background = backgroundOf[key], !captured.contains(key), budgets[key, default: Budget()].isLeft,
               time >= retryAt[key, default: 0], let hover = hovers[key], hover.place == place,
               time - hover.since >= Self.settle, time - steadySince >= Self.settle
         else { return nil }
-        return Capture(session: session, key: key, place: place, thumbnail: thumbnail, hoverChanges: hover.changes)
+        return Capture(session: session, key: key, place: place, thumbnail: thumbnail, hoverChanges: hover.changes,
+                       background: background)
     }
 
     /// Takes in what `capture` brought back at `time`, nil when the screen couldn't be captured, unless it belongs
@@ -223,8 +226,8 @@ struct CaptionStrips {
         if moved || hovers[key]?.changes != capture.hoverChanges {
             outcome = .moved
         } else {
-            if let seen = result?.seen, let background = backgroundOf[key] {
-                sightings[key] = (seen, background)
+            if let seen = result?.seen {
+                sightings[key] = (seen, capture.background)
                 dressing[key] = nil
             }
             switch result {

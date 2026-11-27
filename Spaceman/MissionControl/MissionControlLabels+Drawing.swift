@@ -149,8 +149,7 @@ extension MissionControlLabels {
     }
 
     /// `label`'s move with the bar of names growing into thumbnails as `running` has it, `caption` its caption
-    /// there: from where it sat on the names to where it is placed, timed as macOS's captions are on a bar that
-    /// `magnifies`, else as the thumbnails are, started half a frame early, as for `slide`.
+    /// there: from where it sat on the names to where it is placed, timed by `growTiming`.
     private func growMove(
         of label: MissionControlLabel, for caption: Caption, from source: LookSource,
         in running: (screen: CGRect, reference: TimeInterval, from: BarLayout, to: BarLayout), magnifies: Bool
@@ -165,10 +164,16 @@ extension MissionControlLabels {
             }
             from = CGVector(dx: leaving.centre.x - caption.centre.x, dy: leaving.centre.y - caption.centre.y)
         }
-        let move = TimedMove(timing: magnifies ? DockMotion.growCaptions : DockMotion.expand,
-                             reference: running.reference, from: from)
-        // The captions' ride was fitted against the labels' frames as they reach the screen: no lead.
-        return magnifies ? move : move.earlier(by: clock.frameDuration / 2)
+        let ride = Self.growTiming(magnifies: magnifies, frameDuration: clock.frameDuration)
+        return TimedMove(timing: ride.timing, reference: running.reference, from: from).earlier(by: ride.lead)
+    }
+
+    /// How the labels ride the grow onto a bar that `magnifies`: as macOS's captions do, with no lead, the captions'
+    /// ride having been fitted against the labels' frames as they reach the screen. Onto any other, as the
+    /// thumbnails grow, started half a frame of `frameDuration` early, as for `slide`.
+    static func growTiming(magnifies: Bool, frameDuration: TimeInterval)
+        -> (timing: DockMotion.Timing, lead: TimeInterval) {
+        magnifies ? (DockMotion.growCaptions, 0) : (DockMotion.expand, frameDuration / 2)
     }
 
     /// How far a label riding the grow onto a magnifying bar reaches past its look either side, `travel` across:

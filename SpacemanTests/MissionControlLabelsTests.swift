@@ -2180,6 +2180,47 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(start(at: grows - frameMs + 0.01, reported: false, known: false), .giveUp)
     }
 
+    /// The grow is onto a magnifying bar if the thumbnails the Dock reports magnify, or failing a report, those an
+    /// earlier expansion laid out, whatever the labels' style.
+    func testTheGrowIsOntoAMagnifyingBarAsTheDockReportsItOrFailingThatAsLastLaidOut() {
+        let magnification = magnificationLearned()
+        func magnifies(onto reported: BarLayout?, known: BarLayout?) -> Bool {
+            MissionControlLabels.growMagnifies(onto: reported, known: known, by: magnification)
+        }
+        let sixteen = thumbnailBar(), fifteen = thumbnailBar(count: 15)
+        XCTAssertTrue(magnifies(onto: sixteen, known: nil))
+        XCTAssertTrue(magnifies(onto: nil, known: sixteen))
+        XCTAssertFalse(magnifies(onto: fifteen, known: sixteen))
+        XCTAssertFalse(magnifies(onto: nil, known: fifteen))
+        XCTAssertFalse(magnifies(onto: nil, known: thumbnailBar(height: 40)))
+        XCTAssertFalse(magnifies(onto: nil, known: nil))
+    }
+
+    /// Onto a magnifying bar the labels ride as macOS's captions do, fitted against the labels' frames as they reach
+    /// the screen; onto any other, as the thumbnails grow, half a frame early.
+    func testTheGrowIsRiddenOnTheCaptionsTimingOntoAMagnifyingBarAndTheThumbnailsOtherwise() {
+        let frame = 1.0 / 60
+        let magnifying = MissionControlLabels.growTiming(magnifies: true, frameDuration: frame)
+        XCTAssertEqual(magnifying.timing, DockMotion.growCaptions)
+        XCTAssertEqual(magnifying.lead, 0)
+        let other = MissionControlLabels.growTiming(magnifies: false, frameDuration: frame)
+        XCTAssertEqual(other.timing, DockMotion.expand)
+        XCTAssertEqual(other.lead, frame / 2)
+    }
+
+    /// What the screens show is read while Mission Control is closed, every second, and at once after a Space switch,
+    /// which forgets when it was last read; never while it is tracked, as a fresh open ends and begins it at once.
+    func testBackgroundsAreReadOnlyWhileClosedEverySecondOrAtOnceAfterASpaceSwitch() {
+        func due(at now: TimeInterval, readAt: TimeInterval?, tracking: Bool = false) -> Bool {
+            MissionControlLabels.backgroundsDue(at: now, readAt: readAt, tracking: tracking)
+        }
+        XCTAssertTrue(due(at: 10, readAt: nil))
+        XCTAssertFalse(due(at: 10, readAt: nil, tracking: true))
+        XCTAssertFalse(due(at: 10.9, readAt: 10))
+        XCTAssertTrue(due(at: 11, readAt: 10))
+        XCTAssertFalse(due(at: 11, readAt: 10, tracking: true))
+    }
+
     /// From one expansion to the next macOS's ride starts up to 4ms sooner or later: filmed, the captions travelling
     /// furthest, 648 and 696pt across, came out 10.3 and 11.8pt past the labels' plates. A riding label's plate
     /// reaches past its look by 2% of its travel either side.
@@ -2468,6 +2509,24 @@ final class MissionControlLabelsTests: XCTestCase {
         strips.beginSession(backgrounds: [primaryKey: "desert"], screens: [primaryInfo])
         assertColor(try components(try XCTUnwrap(drawn(&strips, hovered: 5, at: 30, colors: names).fallback?.fill)),
                     (10, 10, 40))
+    }
+
+    /// What a capture saw is kept with what its screen showed as it was shot, as its strip is, not with what the
+    /// session read before it opened, which a Space switch just before may have left behind.
+    func testWhatACaptureSawIsKeptWithTheBackgroundReadAsItWasShot() throws {
+        var strips = strips(background: "hills")
+        let names = CaptionLooks.Colors(bar: cgColor((10, 10, 40)))
+        var capture = try XCTUnwrap(capture(&strips))
+        XCTAssertEqual(capture.background, "hills")
+        capture.background = "desert"
+        let missed = MissionControlCaptionLook.StripCapture.missed(
+            "text left beside the caption", seen: sighting(bar: barColor))
+        XCTAssertEqual(strips.finish(capture, missed, moved: false, at: 10.2), .missed)
+        assertColor(try components(try XCTUnwrap(drawn(&strips, hovered: 5, at: 10.3, colors: names).fallback?.fill)),
+                    (10, 10, 40))
+        strips.beginSession(backgrounds: [primaryKey: "desert"], screens: [primaryInfo])
+        assertColor(try components(try XCTUnwrap(drawn(&strips, hovered: 5, at: 20, colors: names).fallback?.fill)),
+                    barColor)
     }
 
     func testAStripCapturedOverAnotherBackgroundIsNotDrawn() throws {

@@ -29,17 +29,18 @@ extension MissionControlLabels {
             guard Self.retraction(bar: bar.frame, screen: bar.screen) <= Self.restSlack,
                   let place = shownLabels(on: bar, at: now).hovered, bar.buttons.indices.contains(place),
                   let key = captionStrips.key(for: bar),
-                  let capture = captionStrips.capture(
+                  var capture = captionStrips.capture(
                     key: key, hovered: place, thumbnail: bar.buttons[place].frame, at: now, steadySince: steadySince),
                   // Read as a look's capture reads it, once it is due: what the screen shows as it is shot.
                   let background = CaptionLooks.currentBackgrounds()[CaptionLooks.screenKey(bar.screen)]
             else { continue }
-            startStripCapture(capture, of: bar, background: background)
+            capture.background = background
+            startStripCapture(capture, of: bar)
             return
         }
     }
 
-    private func startStripCapture(_ capture: CaptionStrips.Capture, of bar: BarLayout, background: String) {
+    private func startStripCapture(_ capture: CaptionStrips.Capture, of bar: BarLayout) {
         isCapturingStrip = true
         let thumbnail = bar.buttons[capture.place]
         // The caption is looked for as far as a thumbnail's width either side, and text left beside it as far as two.
@@ -50,7 +51,7 @@ extension MissionControlLabels {
             barTop: CaptionStrips.depthTop(of: bar), barBottom: bar.frame.maxY, maxWidth: 2 * thumbnail.frame.width,
             covers: thumbnail.title, name: "")
         let motion = barMotionCount
-        let displayID = bar.displayID, screen = bar.screen
+        let displayID = bar.displayID, screen = bar.screen, background = capture.background
         let owner = WeakOwner(self)
         Task.detached(priority: .userInitiated) {
             let shot = await MissionControlCaptionLook.captureStrip(
