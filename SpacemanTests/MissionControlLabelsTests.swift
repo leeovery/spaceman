@@ -2691,34 +2691,48 @@ final class MissionControlLabelsTests: XCTestCase {
             intent: image.renderingIntent == .perceptual ? .saturation : .perceptual)))
     }
 
-    /// `written` as it is, then changed in each way its file would hold.
-    private func variations(of written: CaptionStrip) throws -> [CaptionStrip] {
-        let repainted = CaptionStrip(
-            image: try redrawn(written.image, painting: textColor, x: 400, y: 10), scale: written.scale,
-            top: written.top, baseline: written.baseline, lineOffset: written.lineOffset, text: written.text,
-            background: written.background)
-        return [try strip(), try strip(background: "desert"), try strip(text: (120, 120, 130)),
-                try strip(lineOffset: 1), repainted]
+    /// `written` captured again as it is, and changed in each field its file holds but its version, by that field.
+    private func variations(of written: CaptionStrip) throws -> (same: CaptionStrip, changed: [String: CaptionStrip]) {
+        func changed(
+            image: CGImage? = nil, scale: CGFloat? = nil, top: CGFloat? = nil, baseline: CGFloat? = nil,
+            lineOffset: CGFloat? = nil, fontSize: CGFloat? = nil, color: CGColor? = nil, background: String? = nil
+        ) -> CaptionStrip {
+            CaptionStrip(
+                image: image ?? written.image, scale: scale ?? written.scale, top: top ?? written.top,
+                baseline: baseline ?? written.baseline, lineOffset: lineOffset ?? written.lineOffset,
+                text: CaptionStrip.TextStyle(fontSize: fontSize ?? written.text.fontSize,
+                                             color: color ?? written.text.color),
+                background: background ?? written.background)
+        }
+        return (try strip(), [
+            "png": changed(image: try redrawn(written.image, painting: textColor, x: 400, y: 10)),
+            "scale": changed(scale: 1), "top": changed(top: 117), "baseline": changed(baseline: 19),
+            "lineOffset": changed(lineOffset: 1), "fontSize": changed(fontSize: 13),
+            "textColor": changed(color: cgColor((120, 120, 130))), "background": changed(background: "desert"),
+        ])
     }
 
     /// Each session's captures keep a strip again: its file is written only once what it would hold changes.
     func testAStripIsWrittenAgainOnlyOnceWhatItWouldHoldChanges() throws {
         let written = try strip()
         let variations = try variations(of: written)
-        XCTAssertTrue(written.holdsSame(as: variations[0]))
-        for changed in variations.dropFirst() { XCTAssertFalse(written.holdsSame(as: changed)) }
+        XCTAssertTrue(written.holdsSame(as: variations.same))
+        for (field, changed) in variations.changed { XCTAssertFalse(written.holdsSame(as: changed), field) }
         let data = try XCTUnwrap(CaptionStripStore.encode(written))
         let read = try XCTUnwrap(CaptionStripStore.decode(data))
         XCTAssertTrue(read.holdsSame(as: try XCTUnwrap(CaptionStripStore.decode(data))))
     }
 
-    /// A strip holds the same as another exactly when their files would: a field written but left out of the
-    /// comparison would fail this.
+    /// A strip holds the same as another exactly when their files would, each field the file holds changed in turn.
+    /// The fields are pinned to those varied: one added to the file fails this until a variation of it is added, and
+    /// then until the comparison takes it in.
     func testAStripHoldsTheSameAsAnotherExactlyWhenTheirFilesWould() throws {
         let written = try strip()
         let file = try XCTUnwrap(CaptionStripStore.encode(written))
-        for other in try variations(of: written) {
-            XCTAssertEqual(written.holdsSame(as: other), CaptionStripStore.encode(other) == file)
+        let variations = try variations(of: written)
+        XCTAssertEqual(try fields(of: file), Set(variations.changed.keys).union(["version"]))
+        for (field, other) in [("none", variations.same)] + variations.changed.map({ ($0.key, $0.value) }) {
+            XCTAssertEqual(written.holdsSame(as: other), CaptionStripStore.encode(other) == file, field)
         }
     }
 
@@ -2861,21 +2875,39 @@ final class MissionControlLabelsTests: XCTestCase {
     func testAScreensLooksAreWrittenAgainOnlyOnceWhatTheyWouldHoldChanges() throws {
         let written = try namesRowScreenLooks()
         let variations = try variations(of: written)
-        XCTAssertTrue(written.holdsSame(as: variations[0]))
-        for changed in variations.dropFirst() { XCTAssertFalse(written.holdsSame(as: changed)) }
+        XCTAssertTrue(written.holdsSame(as: variations.same))
+        for (field, changed) in variations.changed { XCTAssertFalse(written.holdsSame(as: changed), field) }
         let data = try XCTUnwrap(CaptionLookStore.encode(written))
         let read = try XCTUnwrap(CaptionLookStore.decode(data))
         XCTAssertTrue(read.holdsSame(as: try XCTUnwrap(CaptionLookStore.decode(data))))
     }
 
-    /// A screen's looks hold the same as others exactly when their files would: a field written but left out of the
-    /// comparison would fail this.
+    /// A screen's looks hold the same as others exactly when their files would, each field the file holds, and its
+    /// list of looks, changed in turn. The fields are pinned to those varied: one added to the file fails this until a
+    /// variation of it is added, and then until the comparison takes it in.
     func testAScreensLooksHoldTheSameAsOthersExactlyWhenTheirFilesWould() throws {
         let written = try namesRowScreenLooks()
         let file = try XCTUnwrap(CaptionLookStore.encode(written))
-        for other in try variations(of: written) {
-            XCTAssertEqual(written.holdsSame(as: other), CaptionLookStore.encode(other) == file)
+        let variations = try variations(of: written)
+        XCTAssertEqual(try fields(of: file), Set(variations.changed.keys).subtracting(["looks"]).union(["version"]))
+        for (field, other) in [("none", variations.same)] + variations.changed.map({ ($0.key, $0.value) }) {
+            XCTAssertEqual(written.holdsSame(as: other), CaptionLookStore.encode(other) == file, field)
         }
+    }
+
+    /// The fields of the property list `file` holds, a nested one by its path, a list's by its first element's.
+    private func fields(of file: Data) throws -> Set<String> {
+        func leaves(_ dictionary: [String: Any], prefix: String) -> [String] {
+            dictionary.flatMap { key, value -> [String] in
+                if let nested = value as? [String: Any] { return leaves(nested, prefix: "\(prefix)\(key).") }
+                if let list = value as? [[String: Any]], let first = list.first {
+                    return leaves(first, prefix: "\(prefix)\(key).")
+                }
+                return [prefix + key]
+            }
+        }
+        let stored = try PropertyListSerialization.propertyList(from: file, format: nil) as? [String: Any]
+        return Set(leaves(try XCTUnwrap(stored), prefix: ""))
     }
 
     private func namesRowScreenLooks(over background: String = "hills", top: CGFloat = 7.5) throws
@@ -2883,22 +2915,54 @@ final class MissionControlLabelsTests: XCTestCase {
         try XCTUnwrap(try namesRowLooks(over: background, top: top).screenLooks(primaryKey))
     }
 
-    /// `written` captured again as it is, then changed in each way its file would hold.
-    private func variations(of written: CaptionLooks.ScreenLooks) throws -> [CaptionLooks.ScreenLooks] {
+    /// `written` captured again as it is, and changed in each field its file holds but its version, by the field's
+    /// path, and with fewer looks ("looks").
+    private func variations(of written: CaptionLooks.ScreenLooks) throws
+        -> (same: CaptionLooks.ScreenLooks, changed: [String: CaptionLooks.ScreenLooks]) {
+        typealias Variant = NativeCaptionLook.Variant
         let first = try XCTUnwrap(written.entries.first)
-        let plain = try XCTUnwrap(first.look.plain)
-        var repainted = NativeCaptionLook(
-            plain: NativeCaptionLook.Variant(frame: plain.frame, top: plain.top,
-                                             image: try redrawn(plain.image, painting: (255, 0, 0)),
-                                             baseline: plain.baseline),
-            current: first.look.current, wasCurrent: first.look.wasCurrent, summary: first.look.summary)
-        repainted.textColor = first.look.textColor
-        repainted.barColor = first.look.barColor
-        let entries = [CaptionLooks.ScreenLooks.Entry(exact: first.exact, name: first.name, look: repainted)]
-            + written.entries.dropFirst()
-        return [try namesRowScreenLooks(), try namesRowScreenLooks(over: "desert"), try namesRowScreenLooks(top: 8),
-                CaptionLooks.ScreenLooks(background: written.background, entries: Array(written.entries.prefix(1))),
-                CaptionLooks.ScreenLooks(background: written.background, entries: entries)]
+        let plain = try XCTUnwrap(first.look.plain), current = try XCTUnwrap(first.look.current)
+        func variant(_ base: Variant, frame: CGRect? = nil, top: CGFloat? = nil, image: CGImage? = nil,
+                     baseline: CGFloat? = nil) -> Variant {
+            Variant(frame: frame ?? base.frame, top: top ?? base.top, image: image ?? base.image,
+                    baseline: baseline ?? base.baseline)
+        }
+        func look(plain: Variant? = nil, current: Variant? = nil, wasCurrent: Bool? = nil, summary: String? = nil,
+                  textColor: CGColor? = nil, barColor: CGColor? = nil) -> NativeCaptionLook {
+            var made = NativeCaptionLook(
+                plain: plain ?? first.look.plain, current: current ?? first.look.current,
+                wasCurrent: wasCurrent ?? first.look.wasCurrent, summary: summary ?? first.look.summary)
+            made.textColor = textColor ?? first.look.textColor
+            made.barColor = barColor ?? first.look.barColor
+            return made
+        }
+        func changed(exact: String? = nil, name: String? = nil, look: NativeCaptionLook? = nil)
+            -> CaptionLooks.ScreenLooks {
+            let entry = CaptionLooks.ScreenLooks.Entry(
+                exact: exact ?? first.exact, name: name ?? first.name, look: look ?? first.look)
+            return CaptionLooks.ScreenLooks(
+                background: written.background, entries: [entry] + written.entries.dropFirst())
+        }
+        let moved = plain.frame.offsetBy(dx: 1, dy: 0)
+        let repainted = try redrawn(plain.image, painting: (255, 0, 0))
+        return (try namesRowScreenLooks(), [
+            "background": try namesRowScreenLooks(over: "desert"),
+            "looks": CaptionLooks.ScreenLooks(
+                background: written.background, entries: Array(written.entries.prefix(1))),
+            "looks.exact": changed(exact: "Desktop 9|Mail|40"), "looks.name": changed(name: "Post|40"),
+            "looks.wasCurrent": changed(look: look(wasCurrent: !first.look.wasCurrent)),
+            "looks.summary": changed(look: look(summary: "measured otherwise")),
+            "looks.textColor": changed(look: look(textColor: cgColor((120, 120, 130)))),
+            "looks.barColor": changed(look: look(barColor: cgColor((40, 10, 10)))),
+            "looks.plain.frame": changed(look: look(plain: variant(plain, frame: moved))),
+            "looks.plain.top": changed(look: look(plain: variant(plain, top: plain.top + 1))),
+            "looks.plain.baseline": changed(look: look(plain: variant(plain, baseline: plain.baseline + 1))),
+            "looks.plain.png": changed(look: look(plain: variant(plain, image: repainted))),
+            "looks.current.frame": changed(look: look(current: variant(current, frame: moved))),
+            "looks.current.top": changed(look: look(current: variant(current, top: current.top + 1))),
+            "looks.current.baseline": changed(look: look(current: variant(current, baseline: current.baseline + 1))),
+            "looks.current.png": changed(look: look(current: variant(current, image: repainted))),
+        ])
     }
 
     /// The first session after a launch: the names row's labels are drawn from their first frame, with no capture.
