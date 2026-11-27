@@ -281,12 +281,15 @@ final class MissionControlLabels {
         }
 
         // Switching spaces with Mission Control open moves the pill to the new space's caption, and the
-        // labels, kept to the desktop they opened on, move to the new one.
+        // labels, kept to the desktop they opened on, move to the new one. The new space may show another
+        // wallpaper: what the screens show is read again before Mission Control next opens.
         workspaceCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             guard let self else { return }
             self.currentSpaceIDs = Self.currentSpaceIDs()
+            self.closedBackgroundsReadAt = nil
+            if !self.isTracking { self.readBackgroundsIfDue() }
             if self.isTracking, self.keptToThisDesktop, self.zoom == nil {
                 self.overlay.showOnEveryDesktop(true)
                 self.keptToThisDesktop = false

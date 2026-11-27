@@ -140,11 +140,6 @@ struct CaptionStrips {
         return key
     }
 
-    /// What the screen of the bar whose strip is `key` shows behind it this session.
-    func background(forKey key: String) -> String? {
-        backgroundOf[key]
-    }
-
     /// `bar`'s screen's pixels to the point; nil for a display not known this session.
     func scale(of bar: BarLayout) -> CGFloat? {
         screens[bar.displayID]?.scale
@@ -222,7 +217,7 @@ struct CaptionStrips {
     mutating func finish(
         _ capture: Capture, _ result: MissionControlCaptionLook.StripCapture?, moved: Bool, at time: TimeInterval
     ) -> Outcome {
-        guard capture.session == session else { return .stale }
+        guard isCurrent(capture) else { return .stale }
         let key = capture.key
         let outcome: Outcome
         if moved || hovers[key]?.changes != capture.hoverChanges {
@@ -241,6 +236,11 @@ struct CaptionStrips {
         spend(outcome, of: capture)
         if outcome != .kept { retryAt[key] = time + Self.retryDelay }
         return outcome
+    }
+
+    /// Whether `capture` belongs to this session.
+    func isCurrent(_ capture: Capture) -> Bool {
+        capture.session == session
     }
 
     /// Notes that the looks changed, so each strip's style and fallback are worked out afresh.

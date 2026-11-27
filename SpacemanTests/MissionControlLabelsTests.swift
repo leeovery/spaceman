@@ -2542,6 +2542,17 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertNil(drawn(&strips, hovered: 5, at: 10.3).strip)
     }
 
+    /// A shot landing after the next session began is dropped as it lands, by this, before it can take the place of
+    /// that session's own shot: taking it there left the session's capture under way for good.
+    func testOnlyAStripCaptureOfThisSessionIsCurrent() throws {
+        var strips = strips()
+        let earlier = try XCTUnwrap(capture(&strips))
+        XCTAssertTrue(strips.isCurrent(earlier))
+        strips.beginSession(backgrounds: [primaryKey: "hills"], screens: [primaryInfo])
+        XCTAssertFalse(strips.isCurrent(earlier))
+        XCTAssertTrue(strips.isCurrent(try XCTUnwrap(capture(&strips))))
+    }
+
     func testStripsReadFromDiskNeverReplaceOnesCapturedThisRun() throws {
         var strips = strips()
         let capture = try XCTUnwrap(capture(&strips))

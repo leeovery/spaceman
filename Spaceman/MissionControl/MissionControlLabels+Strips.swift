@@ -28,9 +28,11 @@ extension MissionControlLabels {
         for bar in measured where magnification.magnifies(bar) {
             guard Self.retraction(bar: bar.frame, screen: bar.screen) <= Self.restSlack,
                   let place = shownLabels(on: bar, at: now).hovered, bar.buttons.indices.contains(place),
-                  let key = captionStrips.key(for: bar), let background = captionStrips.background(forKey: key),
+                  let key = captionStrips.key(for: bar),
                   let capture = captionStrips.capture(
-                    key: key, hovered: place, thumbnail: bar.buttons[place].frame, at: now, steadySince: steadySince)
+                    key: key, hovered: place, thumbnail: bar.buttons[place].frame, at: now, steadySince: steadySince),
+                  // Read as a look's capture reads it, once it is due: what the screen shows as it is shot.
+                  let background = CaptionLooks.currentBackgrounds()[CaptionLooks.screenKey(bar.screen)]
             else { continue }
             startStripCapture(capture, of: bar, background: background)
             return
@@ -54,7 +56,8 @@ extension MissionControlLabels {
             let shot = await MissionControlCaptionLook.captureStrip(
                 displayID: displayID, screen: screen, hovered: hovered, background: background)
             DispatchQueue.main.async {
-                guard let labels = owner.labels else { return }
+                // An earlier session's shot would take the place of this session's own.
+                guard let labels = owner.labels, labels.captionStrips.isCurrent(capture) else { return }
                 if let shot {
                     labels.shotStrip = ShotStrip(capture: capture, shot: shot, motion: motion, screen: screen)
                 } else {
