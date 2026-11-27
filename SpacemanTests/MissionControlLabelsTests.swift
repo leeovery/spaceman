@@ -1215,6 +1215,20 @@ final class MissionControlLabelsTests: XCTestCase {
             buttons: buttons, spaceIDs: captions.map(\.spaceID))
     }
 
+    /// Where the thumbnails went before is in their screen's frame as it was: once the screens are rearranged, or a
+    /// display's resolution changes, it would replay a grow, or a desktop coming or going, off the thumbnails.
+    func testThumbnailsPlacesSeenBeforeAreTakenOnlyWhileTheirScreenIsWhereItWas() {
+        let seen = thumbnailBar(on: builtIn)
+        let layouts = ["\(seen.displayID)|16": seen.atRest().centred()]
+        func known(_ count: Int, on screen: CGRect) -> BarLayout? {
+            MissionControlLabels.knownLayout(of: count, on: thumbnailBar(height: 40, on: screen), in: layouts)
+        }
+        XCTAssertEqual(known(16, on: builtIn)?.buttons.count, 16)
+        XCTAssertNil(known(15, on: builtIn))
+        XCTAssertNil(known(16, on: builtIn.offsetBy(dx: -builtIn.width - primary.width, dy: 0)))
+        XCTAssertNil(known(16, on: CGRect(x: builtIn.minX, y: builtIn.minY, width: 1512, height: 982)))
+    }
+
     /// The sixth thumbnail hovered and grown, its neighbours shrunk, as measured.
     private let magnifiedWidths: [Int: CGFloat] = [4: 104, 5: 164, 6: 104]
     private var magnifiedBar: BarLayout { thumbnailBar(widths: magnifiedWidths) }
@@ -2129,7 +2143,7 @@ final class MissionControlLabelsTests: XCTestCase {
         let frame = 1.0 / 60
         func start(at ms: Double, reported: Bool = true, known: Bool = true) -> MissionControlLabels.GrowStart {
             MissionControlLabels.growStart(at: 10 + ms / 1000, frameDuration: frame, entered: 10,
-                                           reported: reported, known: known)
+                                           reported: reported, known: known, magnifies: true)
         }
         let rides = DockMotion.growCaptions.delay * 1000, frameMs = frame * 1000
         XCTAssertEqual(start(at: rides - 2 * frameMs - 1), .wait)
@@ -2141,6 +2155,28 @@ final class MissionControlLabelsTests: XCTestCase {
         XCTAssertEqual(start(at: grows - frameMs - 1, reported: false, known: false), .wait)
         XCTAssertEqual(start(at: grows - frameMs + 0.01, reported: false, known: false), .giveUp)
         XCTAssertEqual(start(at: grows - frameMs + 0.01, known: false), .start)
+    }
+
+    /// The captions' ride was fitted on magnifying bars only. Onto a bar that doesn't magnify, or isn't known to,
+    /// started on it the labels wore the thumbnails' looks for four frames while still held on the names: the grow
+    /// starts the frame before the thumbnails grow, with the Dock's report or an earlier expansion's places alike.
+    func testTheGrowOntoABarNotKnownToMagnifyStartsAsTheThumbnailsGrow() {
+        let frame = 1.0 / 60
+        func start(at ms: Double, reported: Bool = true, known: Bool = true) -> MissionControlLabels.GrowStart {
+            MissionControlLabels.growStart(at: 10 + ms / 1000, frameDuration: frame, entered: 10,
+                                           reported: reported, known: known, magnifies: false)
+        }
+        let rides = DockMotion.growCaptions.delay * 1000, grows = DockMotion.expand.delay * 1000
+        let frameMs = frame * 1000
+        XCTAssertEqual(start(at: rides - 2 * frameMs + 0.01), .wait)
+        XCTAssertEqual(start(at: rides - frameMs + 0.01, reported: false), .wait)
+        XCTAssertEqual(start(at: grows - frameMs - 1), .wait)
+        XCTAssertEqual(start(at: grows - frameMs - 1, reported: false), .wait)
+        XCTAssertEqual(start(at: grows - frameMs + 0.01), .start)
+        XCTAssertEqual(start(at: grows - frameMs + 0.01, reported: false), .start)
+        XCTAssertEqual(start(at: grows - frameMs + 0.01, known: false), .start)
+        XCTAssertEqual(start(at: grows - frameMs - 1, reported: false, known: false), .wait)
+        XCTAssertEqual(start(at: grows - frameMs + 0.01, reported: false, known: false), .giveUp)
     }
 
     /// From one expansion to the next macOS's ride starts up to 4ms sooner or later: filmed, the captions travelling

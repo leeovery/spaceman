@@ -79,8 +79,8 @@ extension MissionControlLabels {
             let shown = shownLabels(on: bar, at: frameTime)
             shownByBar.append((bar, shown))
             let phase = growing.map { Self.growPhase(at: frameTime, reference: $0.reference) }
-            let magnifies = matching && magnification.magnifies(bar)
-            let drawing = magnifies ? stripDrawing(for: bar, shown: shown, at: frameTime) : nil
+            let magnifies = magnification.magnifies(bar)
+            let drawing = matching && magnifies ? stripDrawing(for: bar, shown: shown, at: frameTime) : nil
             for caption in bar.captions {
                 // A label macOS draws no caption for goes; in the grow from the names, every one stays until
                 // macOS's captions under the thumbnails not hovered have gone.

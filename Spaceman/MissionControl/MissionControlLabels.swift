@@ -558,9 +558,10 @@ final class MissionControlLabels {
         let reported = reading.layouts.first {
             $0.screen == bar.screen && $0.frame.height > Self.expandedBarHeight
         }
-        let known = expandedLayoutsByCount["\(bar.displayID)|\(bar.buttons.count)"]
+        let known = Self.knownLayout(of: bar.buttons.count, on: bar, in: expandedLayoutsByCount)
         let start = Self.growStart(at: frameTime, frameDuration: clock.frameDuration, entered: pending.time,
-                                   reported: reported != nil, known: known != nil)
+                                   reported: reported != nil, known: known != nil,
+                                   magnifies: (reported ?? known).map(magnification.magnifies) ?? false)
         guard start != .wait else { return }
         pendingGrow = nil
         guard start == .start, let point = pointer?.point, bar.frame.contains(point), slide == nil else { return }
@@ -587,17 +588,30 @@ final class MissionControlLabels {
         record("grow", at: pending.time + DockMotion.expand.delay)
     }
 
+    /// Where `count` thumbnails went when the Dock last laid them out on `bar`'s display, of `layouts`
+    /// (`expandedLayoutsByCount`): only while its screen is where it was then, their frames being on it.
+    static func knownLayout(of count: Int, on bar: BarLayout, in layouts: [String: BarLayout]) -> BarLayout? {
+        layouts["\(bar.displayID)|\(count)"].flatMap { $0.screen == bar.screen ? $0 : nil }
+    }
+
     enum GrowStart { case wait, start, giveUp }
 
     /// Whether to start replaying the grow of a bar of names the pointer entered at `entered`, in the frame reaching
     /// the screen at `frameTime`, the Dock having `reported` where the thumbnails go or an earlier expansion having
-    /// shown it (`known`). Two frames before macOS's captions start riding down, with the Dock's report, so the
-    /// labels' move is on the screen before it starts: the first frame of a ride started later has been filmed
-    /// reaching the screen a frame late, the captions already moving. Without the report, a frame later on what is
-    /// known; with neither, the report is awaited until the thumbnails start growing.
+    /// shown it (`known`). Onto thumbnails known to magnify, two frames before macOS's captions start riding down,
+    /// with the Dock's report, so the labels' move is on the screen before it starts: the first frame of a ride
+    /// started later has been filmed reaching the screen a frame late, the captions already moving. Without the
+    /// report, a frame later on what is known; with neither, the report is awaited until the thumbnails start
+    /// growing. Onto any other bar, whose labels stay on the names until the thumbnails grow, the frame before they
+    /// do: the ride's timing was fitted on magnifying bars only.
     static func growStart(
-        at frameTime: TimeInterval, frameDuration: TimeInterval, entered: TimeInterval, reported: Bool, known: Bool
+        at frameTime: TimeInterval, frameDuration: TimeInterval, entered: TimeInterval, reported: Bool, known: Bool,
+        magnifies: Bool
     ) -> GrowStart {
+        guard magnifies else {
+            guard frameTime + frameDuration >= entered + DockMotion.expand.delay else { return .wait }
+            return reported || known ? .start : .giveUp
+        }
         let rides = entered + DockMotion.growCaptions.delay
         guard frameTime + 2 * frameDuration >= rides else { return .wait }
         if reported { return .start }

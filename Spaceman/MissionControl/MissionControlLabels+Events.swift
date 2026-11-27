@@ -137,7 +137,7 @@ extension MissionControlLabels {
             count = before.buttons.count - 1
             removed = index
         }
-        let known = expandedLayoutsByCount["\(before.displayID)|\(count)"]
+        let known = Self.knownLayout(of: count, on: before, in: expandedLayoutsByCount)
         let centres = known.map { $0.buttons.map(\.frame.midX) } ?? before.buttons.first.map { first in
             Self.predictedCentres(
                 count: count, shown: before.buttons.count, screenMinX: before.screen.minX,
