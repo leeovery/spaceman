@@ -73,9 +73,9 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
     /// Opens the log and, filming, starts streaming if allowed to record the screen. Main thread.
     func start() {
         guard Self.isEnabled else { return }
-        starts.want()
         logQueue.async { self.openFile() }
-        guard Self.savesVideo, filmings.isEmpty, CGPreflightScreenCaptureAccess(), starts.begin() else { return }
+        let filming = Self.savesVideo && CGPreflightScreenCaptureAccess()
+        guard starts.start(filming: filming, filmsRunning: !filmings.isEmpty) else { return }
         let films = Self.films
         Task { await startFilming(films) }
     }
@@ -197,20 +197,18 @@ final class MissionControlMotionRecorder: NSObject, SCStreamDelegate {
     }
 }
 
-/// The recorder's films starting: whether it is wanted on, asked to start since it was last stopped, and whether a
-/// start of its films is under way, so the films a start brings in are kept only if it is still wanted on as they land.
+/// The recorder's films starting: whether they are wanted, by a start that would film since it was last stopped, and
+/// whether a start of them is under way, so the films a start brings in are kept only if still wanted as they land.
 struct FilmStarts {
     private var wanted = false
     private var starting = false
 
-    /// The recorder asked to start, filming or not.
-    mutating func want() {
+    /// The recorder asked to start, `filming` if it is to film, with films running already or not (`filmsRunning`):
+    /// whether to start them. Not while a start of them is under way, whose films serve this start too.
+    mutating func start(filming: Bool, filmsRunning: Bool) -> Bool {
+        guard filming else { return false }
         wanted = true
-    }
-
-    /// Whether to start the films: not while a start of them is under way, whose films serve this start too.
-    mutating func begin() -> Bool {
-        guard !starting else { return false }
+        guard !filmsRunning, !starting else { return false }
         starting = true
         return true
     }

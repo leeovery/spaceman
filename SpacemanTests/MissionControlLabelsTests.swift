@@ -3049,8 +3049,7 @@ final class MissionControlLabelsTests: XCTestCase {
     func testFilmsStartedBeforeAStopAreStoppedAsTheyComeIn() {
         var starts = FilmStarts()
         var stopped: [String] = []
-        starts.want()
-        XCTAssertTrue(starts.begin())
+        XCTAssertTrue(starts.start(filming: true, filmsRunning: false))
         starts.stop()
         XCTAssertEqual(starts.landed(["native", "shown"]) { stopped.append($0) }, [])
         XCTAssertEqual(stopped, ["native", "shown"])
@@ -3061,14 +3060,25 @@ final class MissionControlLabelsTests: XCTestCase {
     func testFilmsStartedBeforeAStopServeAStartMadeWhileTheyCameIn() {
         var starts = FilmStarts()
         var stopped: [String] = []
-        starts.want()
-        XCTAssertTrue(starts.begin())
+        XCTAssertTrue(starts.start(filming: true, filmsRunning: false))
         starts.stop()
-        starts.want()
-        XCTAssertFalse(starts.begin())
+        XCTAssertFalse(starts.start(filming: true, filmsRunning: false))
         XCTAssertEqual(starts.landed(["native", "shown"]) { stopped.append($0) }, ["native", "shown"])
         XCTAssertEqual(stopped, [])
-        XCTAssertTrue(starts.begin())
+        XCTAssertTrue(starts.start(filming: true, filmsRunning: false))
+    }
+
+    /// Started again, after a stop, with the video turned off or the screen no longer recordable, the recorder
+    /// films nothing: the first start's films are stopped as they come in, and none start with films running.
+    func testFilmsAreWantedOnlyByAStartThatWouldFilm() {
+        var starts = FilmStarts()
+        var stopped: [String] = []
+        XCTAssertTrue(starts.start(filming: true, filmsRunning: false))
+        starts.stop()
+        XCTAssertFalse(starts.start(filming: false, filmsRunning: false))
+        XCTAssertEqual(starts.landed(["native", "shown"]) { stopped.append($0) }, [])
+        XCTAssertEqual(stopped, ["native", "shown"])
+        XCTAssertFalse(starts.start(filming: true, filmsRunning: true))
     }
 
     func testTheFilmedBandIs150PointsUnlessAskedOtherwise() {
