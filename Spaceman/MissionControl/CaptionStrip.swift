@@ -89,29 +89,47 @@ struct CaptionStrip {
             fontSize: MissionControlCaptionLook.nativeFontSize, color: measured.text ?? unmeasuredText)
     }
 
-    /// Where a label `width` points wide, centred on `centreX`, goes on a screen whose left edge is at `screenLeft`,
-    /// moved onto whole pixels; and the part of the strip behind it, in the unit coordinates of a layer's
-    /// `contentsRect`.
-    func placement(centreX: CGFloat, width: CGFloat, screenLeft: CGFloat) -> (left: CGFloat, crop: CGRect) {
+    /// Where a label laid out as `layout`, centred on `centreX`, goes on a screen whose left edge is at `screenLeft`,
+    /// moved onto whole pixels; and the part of the strip behind it, in unit coordinates from the strip's top-left.
+    func placement(centreX: CGFloat, layout: StripFace.Layout, screenLeft: CGFloat) -> (left: CGFloat, crop: CGRect) {
+        let width = layout.size.width
         let left = ((centreX - width / 2 - screenLeft) * scale).rounded()
         let imageWidth = CGFloat(image.width)
         return (screenLeft + left / scale,
-                CGRect(x: left / imageWidth, y: 0, width: width * scale / imageWidth, height: 1))
+                CGRect(x: left / imageWidth, y: layout.cut / height, width: width * scale / imageWidth,
+                       height: layout.size.height / height))
     }
 
-    /// A label drawn from this strip, centred on the native caption's ink: as tall as the strip and wide enough to hide
-    /// that caption, `coversWidth` of ink, as a pill would hold it with 2 pixels more either side, and to hold `name`;
-    /// with the name on the captions' baseline.
-    func layout(name: NameImage, coversWidth: CGFloat) -> StripFace.Layout {
+    /// A label drawn from this strip, centred on the native caption's ink: as tall as the strip, less what reaches
+    /// above `ceiling` below the bar's top, and wide enough to hide that caption, `coversWidth` of ink, as a pill would
+    /// hold it with 2 pixels more either side, and to hold `name`; with the name on the captions' baseline.
+    func layout(name: NameImage, coversWidth: CGFloat, ceiling: CGFloat = 0) -> StripFace.Layout {
         let pixel = 1 / scale
         func snapped(_ points: CGFloat) -> CGFloat { (points * scale).rounded() / scale }
         let content = max(name.inkWidth, coversWidth) + 2 * MissionControlCaptionLook.pillPadding
         let width = ((content + 5 * pixel) * scale).rounded(.up) / scale
+        let cut = min(max(((ceiling - top) * scale).rounded(.up) / scale, 0), baseline)
         let nameFrame = CGRect(
-            origin: CGPoint(x: snapped(width / 2 - name.inkMidX), y: snapped(baseline - name.baseline)),
+            origin: CGPoint(x: snapped(width / 2 - name.inkMidX), y: snapped(baseline - name.baseline) - cut),
             size: name.size)
-        return StripFace.Layout(size: CGSize(width: width, height: height), nameFrame: nameFrame)
+        return StripFace.Layout(size: CGSize(width: width, height: height - cut), nameFrame: nameFrame, cut: cut)
     }
+
+    /// How far below a magnifying bar's top, the bar `barHeight` tall on a screen of `screen`'s size, a label's plate
+    /// may start under a thumbnail `thumbnailWidth` wide without cutting into it, its space `current` or not. macOS
+    /// draws the thumbnails centred down the bar and as tall for their width as their screen, the current space's in a
+    /// border `currentBorder` outside it, which a plate keeps a point clear of. Filmed on macOS 26.7: at their
+    /// smallest, 126.7pt wide, the thumbnails ran 37-109pt below the 146pt bar's top; the current space's at its
+    /// largest, 160pt wide, ran 28-118pt, its border to 122pt, and macOS's caption's ink below 127pt.
+    static func plateCeiling(
+        underThumbnailWidth thumbnailWidth: CGFloat, barHeight: CGFloat, screen: CGSize, current: Bool
+    ) -> CGFloat {
+        guard screen.width > 0 else { return 0 }
+        let bottom = (barHeight + thumbnailWidth * screen.height / screen.width) / 2
+        return current ? bottom + currentBorder + 1 : bottom
+    }
+
+    static let currentBorder: CGFloat = 4
 }
 
 /// What a capture saw of a magnifying bar's hovered caption, whether or not it gave a strip: the bar's colour beside
@@ -138,17 +156,20 @@ struct StripFallback: Equatable {
     /// whose middle is at `thumbnailMidX`, the Dock putting the caption's centre at `captionCentreY`, on a bar whose
     /// top is at `barTop`; and its top-left, in AX coordinates.
     func plate(
-        nameWidth: CGFloat, covers: StripNames.Ink, thumbnailMidX: CGFloat, captionCentreY: CGFloat, barTop: CGFloat
+        nameWidth: CGFloat, covers: StripNames.Ink, thumbnailMidX: CGFloat, captionCentreY: CGFloat, barTop: CGFloat,
+        ceiling: CGFloat = 0
     ) -> (plate: LabelPlate, origin: CGPoint) {
         let margin = 2 / scale
         let above = MissionControlCaptionLook.bandAbove + margin
-        let size = CGSize(
+        let full = CGSize(
             width: max(nameWidth, covers.width) + 2 * MissionControlCaptionLook.pillPadding + 2 * margin,
             height: above + MissionControlCaptionLook.bandBelow + margin)
         let centreX = thumbnailMidX + lineOffset + covers.offset
-        let top = baseline.map { barTop + $0 - above } ?? captionCentreY - size.height / 2
-        return (LabelPlate(fill: fill, text: text, size: size, baseline: above),
-                CGPoint(x: centreX - size.width / 2, y: top))
+        let top = baseline.map { barTop + $0 - above } ?? captionCentreY - full.height / 2
+        let cut = min(max(((barTop + ceiling - top) * scale).rounded(.up) / scale, 0), above)
+        return (LabelPlate(fill: fill, text: text, size: CGSize(width: full.width, height: full.height - cut),
+                           baseline: above - cut),
+                CGPoint(x: centreX - full.width / 2, y: top + cut))
     }
 }
 
@@ -156,16 +177,23 @@ struct StripFallback: Equatable {
 /// over it and how they are laid out.
 struct StripFace: Equatable {
 
-    /// In points from the label's top-left, y down.
+    /// In points from the label's top-left, y down; and how far down the strip the label starts.
     struct Layout: Equatable {
         let size: CGSize
         let nameFrame: CGRect
+        var cut: CGFloat = 0
     }
 
     let strip: CGImage
+    /// The part of the strip behind the label, in unit coordinates from its top-left.
     let crop: CGRect
     let name: CGImage
     let layout: Layout
+
+    /// `crop` as a layer's `contentsRect` has it, from the image's bottom-left on macOS.
+    var contentsRect: CGRect {
+        CGRect(x: crop.minX, y: 1 - crop.maxY, width: crop.width, height: crop.height)
+    }
 
     static func == (lhs: StripFace, rhs: StripFace) -> Bool {
         lhs.strip === rhs.strip && lhs.name === rhs.name && lhs.crop == rhs.crop && lhs.layout == rhs.layout

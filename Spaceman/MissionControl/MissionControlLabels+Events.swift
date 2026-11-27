@@ -32,8 +32,9 @@ extension MissionControlLabels {
     }
 
     /// A click on a thumbnail closes Mission Control into that desktop, the bar sliding up as it goes,
-    /// which the Dock reports only some way in: slide the labels up with it from the click. A click on
-    /// the add button, or on a thumbnail's close button, waits for the window server to confirm it.
+    /// which the Dock reports only some way in: slide the labels up with it from the click. So does a click off the
+    /// bars while one shows thumbnails. A click on the add button, or on a thumbnail's close button, waits for the
+    /// window server to confirm it.
     func handleClick(at point: CGPoint) {
         let time = ProcessInfo.processInfo.systemUptime
         let change = restingLayouts.lazy.compactMap { Self.desktopChange(bar: $0, at: point) }.first
@@ -45,7 +46,15 @@ extension MissionControlLabels {
         }
         guard let bar = restingLayouts.first(where: { bar in bar.buttons.contains { $0.frame.contains(point) } }),
               let place = bar.buttons.firstIndex(where: { $0.frame.contains(point) })
-        else { return }
+        else {
+            if Self.closesThumbnails(clickedAt: point, bars: restingLayouts) {
+                noteMotion()
+                slide = TimedSlide(timing: DockMotion.clickClose, reference: time, from: 0, to: 1)
+                record("close expanded from a click", at: time)
+                settleOverlayLevel(at: "closing", choosing: false)
+            }
+            return
+        }
         let button = bar.buttons[place]
         let reading = reader.latest(waitingUpTo: 0)
         let current = reading.layouts.indices.contains { index in
@@ -57,12 +66,20 @@ extension MissionControlLabels {
             // This desktop: Mission Control closes, the bar sliding up.
             slide = TimedSlide(timing: DockMotion.choose, reference: time, from: 0, to: 1)
             record("chose this desktop", at: time)
+            settleOverlayLevel(at: "closing", choosing: false)
             return
         }
         // Another desktop zooms out of its thumbnail over the bar, which stays where it is, its captions
         // showing until the zoom covers them: so do the labels, kept to this desktop since they came in.
         zoom = (bar.screen, button.frame, time)
         record("chose \(button.title)", at: time)
+    }
+
+    /// Whether a click at `point` closes Mission Control from `bars` as a click on a window or the desktop does,
+    /// a bar of thumbnails sliding up: off every bar, with one of them showing thumbnails. A bar of names closes as
+    /// the Dock reports it, soon after such a click.
+    static func closesThumbnails(clickedAt point: CGPoint, bars: [BarLayout]) -> Bool {
+        bars.contains { $0.frame.height > expandedBarHeight } && !bars.contains { $0.frame.contains(point) }
     }
 
     /// What a click at `point` on `bar` does to its desktops, if anything: the add button in the

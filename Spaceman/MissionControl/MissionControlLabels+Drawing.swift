@@ -32,21 +32,31 @@ extension MissionControlLabels {
         return time < reference + growCaptionsGone ? .landed : .over
     }
 
-    /// How far through the ride down onto a magnifying bar the current space's caption loses its pill. macOS fades
-    /// the pill out as it rides, its opacity close to the share of the ride still to go, and draws none under the
-    /// thumbnails: filmed on macOS 26.7, half of it was gone 0.117-0.134s after the pointer entered, as the ride
-    /// passed halfway, and none was left by 0.217s. Labels never fade: theirs goes at once, halfway.
-    static let ridePillGone: CGFloat = 0.5
+    /// How far through the ride down onto a magnifying bar a label turns from the names row's look to the strip's,
+    /// filmed on macOS 26.7:
+    /// - The current space's pill fades out as it rides, its opacity close to the share of the ride still to go:
+    ///   half of it was gone 0.117-0.134s after the pointer entered, as the ride passed halfway, and none was left by
+    ///   0.217s.
+    /// - The grown bar darkens towards its top: blue 139 behind the names row's captions, 152 halfway down, 161 behind
+    ///   the strip's. A look keeps the bar behind its caption: halfway, the two are equally far off.
+    /// Labels never fade: theirs turns at once, halfway.
+    static let rideHalfway: CGFloat = 0.5
+
+    /// Whether a label riding the grow onto a magnifying bar, the pointer having entered the bar at `reference`, is
+    /// past `rideHalfway` in the frame reaching the screen at `time`.
+    static func pastRideHalfway(at time: TimeInterval, reference: TimeInterval) -> Bool {
+        time >= reference + DockMotion.growCaptions.time(toReach: rideHalfway)
+    }
 
     /// Whether a label wears the current space's pill in the frame reaching the screen at `time`: if it is the
     /// `current` space's, unless it rides the grow from the names onto a magnifying bar, the pointer having entered
-    /// the bar at `growReference`, and is past `ridePillGone`. Strips draw no pill whatever this says.
+    /// the bar at `growReference`, and is past `rideHalfway`. Strips draw no pill whatever this says.
     static func wearsPill(
         current: Bool, source: LookSource, at time: TimeInterval, growReference: TimeInterval?
     ) -> Bool {
         guard current else { return false }
         guard source.rides, let growReference else { return true }
-        return time < growReference + DockMotion.growCaptions.time(toReach: ridePillGone)
+        return !pastRideHalfway(at: time, reference: growReference)
     }
 
     /// Draws every bar's labels with the bar `retraction` of the way off its screen, or moving with
@@ -92,7 +102,9 @@ extension MissionControlLabels {
                     running.from.captions.first { $0.spaceID == caption.spaceID }.map { (running.from, $0) }
                 } : nil
                 let source = matching ? Self.lookSource(
-                    for: caption, on: bar, strip: drawing, leaving: leaving, looks: &captionLooks)
+                    for: caption, on: bar, strip: drawing, leaving: leaving,
+                    pastHalfway: growing.map { Self.pastRideHalfway(at: frameTime, reference: $0.reference) } ?? false,
+                    looks: &captionLooks)
                     : .fallback(nil)
                 if case .awaited = source { continue }
                 var dragged: TimedMove?
@@ -116,17 +128,22 @@ extension MissionControlLabels {
                 let running = reflow.flatMap { $0.screen == bar.screen ? $0 : nil }
                 if running?.holds(caption) == true { continue }
                 let reflowing = running?.move(of: caption)?.earlier(by: clock.frameDuration / 2)
+                let current = Self.isCurrent(
+                    caption, selected: selectedPlace, on: measured, currentSpaceIDs: currentSpaceIDs)
                 let inPill = Self.wearsPill(
-                    current: Self.isCurrent(
-                        caption, selected: selectedPlace, on: measured, currentSpaceIDs: currentSpaceIDs),
-                    source: source, at: frameTime, growReference: growing?.reference)
+                    current: current, source: source, at: frameTime, growReference: growing?.reference)
                 let plain = Self.label(for: caption, centre: centre, screen: bar.screen, look: nil)
-                guard var label = dressed(plain, from: source, current: inPill, style: drawing?.style)
+                let ceiling = bar.buttons.indices.contains(caption.index) ? CaptionStrip.plateCeiling(
+                    underThumbnailWidth: bar.buttons[caption.index].frame.width, barHeight: bar.frame.height,
+                    screen: bar.screen.size, current: current) : 0
+                guard var label = dressed(
+                    plain, from: source, current: inPill, style: drawing?.style, ceiling: ceiling)
                 else { continue }
                 label.barHeight = bar.frame.height
                 label.shift = sliding
                 label.grow = dragged ?? reflowing ?? growing.flatMap { running in
-                    growMove(of: label, for: caption, from: source, in: running, magnifies: magnifies)
+                    growMove(of: label, for: caption, from: source, in: running, magnifies: magnifies,
+                             style: drawing?.style)
                 }
                 if let dropped = droppedSpace, dropped.spaceID == caption.spaceID {
                     traceDropped(caption, label: label, look: source.captured, at: frameTime, since: dropped.time)
@@ -146,12 +163,18 @@ extension MissionControlLabels {
     /// `magnifies`, else as the thumbnails are. Started half a frame early, as for `slide`.
     private func growMove(
         of label: MissionControlLabel, for caption: Caption, from source: LookSource,
-        in running: (screen: CGRect, reference: TimeInterval, from: BarLayout, to: BarLayout), magnifies: Bool
+        in running: (screen: CGRect, reference: TimeInterval, from: BarLayout, to: BarLayout), magnifies: Bool,
+        style: CaptionStrip.TextStyle?
     ) -> TimedMove? {
         let from: CGVector
         if case .riding(_, let leaving, _) = source, let look = label.look, let end = label.lookOrigin {
             let start = Self.rideStart(of: look, leaving: leaving, barTop: label.screen.minY)
             from = CGVector(dx: start.x - end.x, dy: start.y - end.y)
+        } else if case .ridingStrip(let strip, let worn, let leaving) = source,
+                  let look = worn.look.variant(current: false), let style {
+            let landing = strip.landing(underThumbnailAt: label.centre.x,
+                                        inkOffset: stripNames.ink(of: label.covers, style: style).offset)
+            from = Self.rideOffset(of: look, leaving: leaving, landing: landing, barTop: label.screen.minY)
         } else {
             guard let leaving = running.from.captions.first(where: { $0.spaceID == caption.spaceID }) else {
                 return nil
@@ -166,6 +189,18 @@ extension MissionControlLabels {
     /// that caption was.
     static func rideStart(of look: NativeCaptionLook.Variant, leaving: CGPoint, barTop: CGFloat) -> CGPoint {
         CGPoint(x: leaving.x + look.frame.minX, y: barTop + look.top)
+    }
+
+    /// How far from where it lands a label riding the grow starts, its name's ink middle and baseline landing at
+    /// `landing` (across, and below the bar's top), whatever it is drawn in: as far as the name in `look`, the look of
+    /// the caption at `leaving` on the names, starts from there. A label turning from that look to the strip's on the
+    /// way keeps its name on one path.
+    static func rideOffset(
+        of look: NativeCaptionLook.Variant, leaving: CGPoint, landing: CGPoint, barTop: CGFloat
+    ) -> CGVector {
+        let start = rideStart(of: look, leaving: leaving, barTop: barTop)
+        return CGVector(dx: start.x + look.frame.width / 2 - landing.x,
+                        dy: start.y + look.baseline - barTop - landing.y)
     }
 
     /// Where a label riding the grow in `look`, the look of the caption at `leaving` on the names, lands over the
@@ -190,6 +225,9 @@ extension MissionControlLabels {
         /// A capture of the caption it rides the grow from, on the names, at `leaving`: landing where `strip`
         /// draws the label, when there is one.
         case riding(FoundLook, leaving: CGPoint, onto: CaptionStrip?)
+        /// Past halfway through that ride: drawn from the magnifying bar's strip, its name on the path the name in
+        /// the `worn` look takes.
+        case ridingStrip(CaptionStrip, worn: FoundLook, leaving: CGPoint)
         /// None yet: macOS's own caption shows until one arrives.
         case awaited
         /// None will arrive in time: drawn plainly, so the name still shows; on a magnifying bar on a plate of the
@@ -204,21 +242,26 @@ extension MissionControlLabels {
         }
 
         var rides: Bool {
-            if case .riding = self { return true }
-            return false
+            switch self {
+            case .riding, .ridingStrip: return true
+            default: return false
+            }
         }
     }
 
     /// Where `caption`'s look comes from on `bar`, in the native look. On a magnifying bar, drawn as `strip` has it,
     /// whatever thumbnail it is under, with no capture of the caption itself, unless it rides the grow from the
-    /// names, `leaving` that bar and its caption there, whose capture it takes while there is one. Elsewhere, a
-    /// capture of the caption.
+    /// names, `leaving` that bar and its caption there, whose capture it takes while there is one, until it is
+    /// `pastHalfway` with a strip to take. Elsewhere, a capture of the caption.
     static func lookSource(
         for caption: Caption, on bar: BarLayout, strip drawing: StripDrawing?,
-        leaving: (bar: BarLayout, caption: Caption)?, looks: inout CaptionLooks
+        leaving: (bar: BarLayout, caption: Caption)?, pastHalfway: Bool = false, looks: inout CaptionLooks
     ) -> LookSource {
         if let drawing {
             if let leaving, let found = looks.look(for: leaving.caption, on: leaving.bar) {
+                if pastHalfway, let strip = drawing.strip {
+                    return .ridingStrip(strip, worn: found, leaving: leaving.caption.centre)
+                }
                 return .riding(found, leaving: leaving.caption.centre, onto: drawing.strip)
             }
             if let strip = drawing.strip { return .strip(strip) }
@@ -229,18 +272,21 @@ extension MissionControlLabels {
     }
 
     /// `label` with its look from `source`, as the current space's or not, placed as high as the native caption sits
-    /// in a bar this tall; a strip's drawn in `style`, with no pill. Nil when a strip's label can't be drawn: then
-    /// macOS's caption shows rather than the fallback.
+    /// in a bar this tall; a strip's drawn in `style`, with no pill, and it and a fallback's plate start no higher than
+    /// `ceiling` below the bar's top. Nil when a strip's label can't be drawn: then macOS's caption shows rather than
+    /// the fallback.
     private func dressed(
-        _ label: MissionControlLabel, from source: LookSource, current: Bool, style: CaptionStrip.TextStyle?
+        _ label: MissionControlLabel, from source: LookSource, current: Bool, style: CaptionStrip.TextStyle?,
+        ceiling: CGFloat
     ) -> MissionControlLabel? {
         var dressed = label
         let barTop = label.screen.minY
         switch source {
-        case .strip(let strip):
-            guard let style, let drawn = stripFace(for: label, strip: strip, style: style) else { return nil }
+        case .strip(let strip), .ridingStrip(let strip, _, _):
+            guard let style, let drawn = stripFace(for: label, strip: strip, style: style, ceiling: ceiling)
+            else { return nil }
             dressed.strip = drawn.face
-            dressed.lookOrigin = CGPoint(x: drawn.left, y: barTop + strip.top)
+            dressed.lookOrigin = drawn.origin
         case .captured(let found):
             dressed.wear(found.look, current: current, barTop: barTop)
         case .riding(let found, let leaving, let strip):
@@ -254,7 +300,7 @@ extension MissionControlLabels {
             }
         case .fallback(let fallback):
             guard let fallback, let style else { break }
-            let placed = fallbackPlate(for: label, fallback: fallback, style: style)
+            let placed = fallbackPlate(for: label, fallback: fallback, style: style, ceiling: ceiling)
             dressed.plate = placed.plate
             dressed.lookOrigin = placed.origin
         case .awaited:
@@ -266,10 +312,12 @@ extension MissionControlLabels {
     /// Which of `bar`'s labels are drawn in the frame reaching the screen at `time`: on a bar of thumbnails that
     /// magnifies, the hovered one's, with those beside a gap the pointer is about to cross and the one it just left.
     func shownLabels(on bar: BarLayout, at time: TimeInterval) -> ShownLabels {
-        let kept = hoverTrails[BarMagnification.key(of: bar)]?.kept(at: time, frameDuration: clock.frameDuration)
+        let key = BarMagnification.key(of: bar)
+        let kept = hoverTrails[key]?.kept(at: time, frameDuration: clock.frameDuration)
+        let approach = ShownLabels.Approach.of(
+            pointer: pointerPace.velocity, gaps: gapPaces[key]?.velocities ?? [], frameDuration: clock.frameDuration)
         return ShownLabels.on(
-            bar, magnifies: magnification.magnifies(bar), pointer: pointer?.point,
-            reach: ShownLabels.reach(speed: pointerPace.speed, frameDuration: clock.frameDuration), keeping: kept)
+            bar, magnifies: magnification.magnifies(bar), pointer: pointer?.point, approach: approach, keeping: kept)
     }
 
     /// Notes the thumbnail hovered on `bar`, if any, in the frame reaching the screen at `time`.

@@ -134,17 +134,48 @@ enum ShownLabels: Equatable {
     /// None: the pointer is off a magnifying bar.
     case none
 
-    /// How many frames the pointer is ahead of the labels: macOS moves its caption the instant the pointer crosses
-    /// the middle of a gap, and a label drawn from the pointer reaches the screen up to two frames later.
-    static let framesBehind = 2
+    /// How the pointer and a bar's gaps between thumbnails move, in points a second, rightwards positive, and how far
+    /// ahead a crossing counts as about to happen.
+    struct Approach: Equatable {
+        var pointer: CGFloat = 0
+        /// By gap, left to right: none where not known, as still.
+        var gaps: [CGFloat] = []
+        var horizon: TimeInterval = 0
+
+        static let still = Approach()
+
+        /// The approach of a pointer moving at `pointer` to gaps moving at `gaps`, crossings `framesAhead` frames of
+        /// `frameDuration` ahead counting as about to happen.
+        static func of(pointer: CGFloat, gaps: [CGFloat], frameDuration: TimeInterval) -> Approach {
+            Approach(pointer: pointer, gaps: gaps, horizon: Double(framesAhead) * frameDuration)
+        }
+
+        /// Whether the pointer at `x` crosses the middle at `middle` of the gap at `index` within `horizon`, or is
+        /// within `leastReach` of it, moving.
+        func crossesSoon(_ middle: CGFloat, gap index: Int, from x: CGFloat) -> Bool {
+            guard pointer != 0 else { return false }
+            let offset = middle - x
+            if abs(offset) < ShownLabels.leastReach { return true }
+            let closing = pointer - (gaps.indices.contains(index) ? gaps[index] : 0)
+            guard closing != 0 else { return false }
+            let time = TimeInterval(offset / closing)
+            return time >= 0 && time <= horizon
+        }
+    }
+
+    /// How many frames ahead of the pointer's crossing of a gap's middle both thumbnails' labels are drawn. macOS
+    /// moves its caption as soon as 8ms after the pointer crosses, and a label drawn from the pointer reaches the
+    /// screen a frame after it is read; drawn this far ahead, it is there at least two frames before macOS's swap
+    /// (filmed on macOS 26.7, every crossing of 16 desktops swept at 1200-2300pt a second).
+    static let framesAhead = 4
     /// The least distance either side of a gap's middle in which a moving pointer shows both thumbnails' labels.
     static let leastReach: CGFloat = 3
 
     /// A bar's labels: all of them, unless its thumbnails `magnifies`. Then the hovered thumbnail's, while
-    /// `pointer` (AX coordinates) is within the bar's height; with both thumbnails beside each gap whose middle is
-    /// within `reach` of the pointer, and the one at `kept`, which the hover has just left.
+    /// `pointer` (AX coordinates) is within the bar's height; with both thumbnails beside each gap the pointer
+    /// crosses soon on its `approach`, and the one at `kept`, which the hover has just left.
     static func on(
-        _ bar: BarLayout, magnifies: Bool, pointer: CGPoint?, reach: CGFloat = 0, keeping kept: Int? = nil
+        _ bar: BarLayout, magnifies: Bool, pointer: CGPoint?, approach: Approach = .still, keeping kept: Int? = nil
     ) -> ShownLabels {
         guard magnifies else { return .all }
         let top = bar.screen.minY
@@ -152,19 +183,18 @@ enum ShownLabels: Equatable {
         guard let pointer, (top...(top + bar.frame.height)).contains(pointer.y),
               let place = hoveredThumbnail(frames, at: pointer.x)
         else { return .none }
-        let near = frames.indices.dropLast().filter { abs(gapMiddle(after: $0, in: frames) - pointer.x) < reach }
-        var also = Set(near.flatMap { [$0, $0 + 1] })
+        let near = gapMiddles(frames).enumerated().filter { index, middle in
+            approach.crossesSoon(middle, gap: index, from: pointer.x)
+        }
+        var also = Set(near.flatMap { [$0.offset, $0.offset + 1] })
         if let kept, frames.indices.contains(kept) { also.insert(kept) }
         also.remove(place)
         return .only(place, also: also)
     }
 
-    /// How far either side of a gap's middle a pointer moving at `speed` (points a second) shows both thumbnails'
-    /// labels: as far as it moves in `framesBehind` frames of `frameDuration`, and at least `leastReach`. None for a
-    /// pointer at rest, which shows only the hovered thumbnail's.
-    static func reach(speed: CGFloat, frameDuration: TimeInterval) -> CGFloat {
-        guard speed > 0 else { return 0 }
-        return max(leastReach, speed * CGFloat(frameDuration) * CGFloat(framesBehind))
+    /// The middles of the gaps between `frames`, left to right.
+    static func gapMiddles(_ frames: [CGRect]) -> [CGFloat] {
+        frames.indices.dropLast().map { gapMiddle(after: $0, in: frames) }
     }
 
     /// The thumbnail of `frames`, left to right, whose span out to the middle of the gap on each side
@@ -229,10 +259,44 @@ struct PointerPace {
         samples.append((time, point.x))
     }
 
-    /// The pointer's speed across the bars, in points a second, either way.
-    var speed: CGFloat {
+    /// The pointer's velocity across the bars, in points a second, rightwards positive.
+    var velocity: CGFloat {
         guard let first = samples.first, let last = samples.last, last.time > first.time else { return 0 }
-        return abs(last.x - first.x) / CGFloat(last.time - first.time)
+        return (last.x - first.x) / CGFloat(last.time - first.time)
+    }
+
+    /// The pointer's speed across the bars, in points a second, either way.
+    var speed: CGFloat { abs(velocity) }
+}
+
+/// How fast the gaps between a magnifying bar's thumbnails move, from the Dock's readings of the bar: as the pointer
+/// nears an end of the bar, the thumbnails there slide towards it.
+struct GapPace {
+
+    /// How far apart the readings compared are at least: the Dock repeats a reading for a frame now and then.
+    static let span: TimeInterval = 0.03
+    /// How long readings are kept.
+    private static let kept: TimeInterval = 0.1
+
+    private var samples: [(time: TimeInterval, middles: [CGFloat])] = []
+
+    /// Notes `bar` as the Dock read it at `time`. A reading of another number of thumbnails starts afresh.
+    mutating func note(_ bar: BarLayout, at time: TimeInterval) {
+        let middles = ShownLabels.gapMiddles(bar.buttons.map(\.frame))
+        if samples.last?.middles.count != middles.count { samples = [] }
+        guard samples.last.map({ time > $0.time }) ?? true else { return }
+        samples.removeAll { $0.time < time - Self.kept }
+        samples.append((time, middles))
+    }
+
+    /// Each gap's velocity, left to right, in points a second, rightwards positive: from the latest reading and the
+    /// latest at least `span` before it. None until there are two.
+    var velocities: [CGFloat] {
+        guard let last = samples.last,
+              let earlier = samples.last(where: { $0.time <= last.time - Self.span })
+        else { return [] }
+        let elapsed = CGFloat(last.time - earlier.time)
+        return zip(last.middles, earlier.middles).map { ($0 - $1) / elapsed }
     }
 }
 

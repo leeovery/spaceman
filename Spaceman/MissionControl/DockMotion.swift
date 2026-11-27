@@ -55,6 +55,11 @@ enum DockMotion {
     /// Closing the bar of thumbnails, timed the same way. Not yet fitted on this Mac: it takes the
     /// close's correction to the delay.
     static let closeExpanded = Timing(delay: 0.060, duration: 0.236, curve: CubicBezier(0.436, 0.241, 0.514, 1.046))
+    /// Closing the bar of thumbnails by a click off the bars, on a window or the desktop, timed from the click (its
+    /// release, as Spaceman sees it). The Dock answers nothing for 100ms or so after such a click, so the close can't
+    /// wait for its report, as the keyboard's does. Fitted on macOS 26.7 to two such closes with 15 desktops, filmed:
+    /// to within 5pt of the captions' rise, 3pt on average; macOS's captions stay opaque as they go.
+    static let clickClose = Timing(delay: 0.064, duration: 0.236, curve: CubicBezier(0.814, 0.835, 0.185, 0.884))
     /// Mission Control asked back while closing: the Dock turns the bar around from where it is.
     static let reverse = Timing(delay: 0.010, duration: 0.245, curve: CubicBezier(0.42, 0, 0.58, 1))
     /// The thumbnails of a hover-expanded bar sliding back to the middle once the pointer leaves them,

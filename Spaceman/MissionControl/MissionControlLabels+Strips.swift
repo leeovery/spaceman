@@ -111,27 +111,29 @@ extension MissionControlLabels {
         return drawing
     }
 
-    /// `label` on `fallback`'s plate, centred where a strip would centre it, its names measured in `style`.
+    /// `label` on `fallback`'s plate, centred where a strip would centre it, its names measured in `style`, starting
+    /// no higher than `ceiling` below the bar's top.
     func fallbackPlate(
-        for label: MissionControlLabel, fallback: StripFallback, style: CaptionStrip.TextStyle
+        for label: MissionControlLabel, fallback: StripFallback, style: CaptionStrip.TextStyle, ceiling: CGFloat
     ) -> (plate: LabelPlate, origin: CGPoint) {
         fallback.plate(
             nameWidth: stripNames.ink(of: label.name, style: style).width,
             covers: stripNames.ink(of: label.covers, style: style), thumbnailMidX: label.centre.x,
-            captionCentreY: label.centre.y, barTop: label.screen.minY)
+            captionCentreY: label.centre.y, barTop: label.screen.minY, ceiling: ceiling)
     }
 
-    /// `label` drawn from `strip` in `style`, centred on the native caption's ink under its thumbnail: the face, and
-    /// the label's left edge.
+    /// `label` drawn from `strip` in `style`, centred on the native caption's ink under its thumbnail, starting no
+    /// higher than `ceiling` below the bar's top: the face, and the label's top-left in AX coordinates.
     func stripFace(
-        for label: MissionControlLabel, strip: CaptionStrip, style: CaptionStrip.TextStyle
-    ) -> (face: StripFace, left: CGFloat)? {
+        for label: MissionControlLabel, strip: CaptionStrip, style: CaptionStrip.TextStyle, ceiling: CGFloat
+    ) -> (face: StripFace, origin: CGPoint)? {
         guard let name = stripNames.image(for: label.name, style: style, scale: strip.scale) else { return nil }
         let covers = stripNames.ink(of: label.covers, style: style)
-        let layout = strip.layout(name: name, coversWidth: covers.width)
+        let layout = strip.layout(name: name, coversWidth: covers.width, ceiling: ceiling)
         let placed = strip.placement(
             centreX: strip.inkCentre(underThumbnailAt: label.centre.x, inkOffset: covers.offset),
-            width: layout.size.width, screenLeft: label.screen.minX)
-        return (StripFace(strip: strip.image, crop: placed.crop, name: name.image, layout: layout), placed.left)
+            layout: layout, screenLeft: label.screen.minX)
+        return (StripFace(strip: strip.image, crop: placed.crop, name: name.image, layout: layout),
+                CGPoint(x: placed.left, y: label.screen.minY + strip.top + layout.cut))
     }
 }

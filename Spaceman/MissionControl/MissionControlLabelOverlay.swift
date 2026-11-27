@@ -66,8 +66,14 @@ final class MissionControlLabelOverlay {
 
     /// Height of one label, which the caption positions are worked out from.
     static var labelHeight: CGFloat { LabelLayer.height }
+    /// How far down each screen the label windows reach: far enough for hover-expanded thumbnails.
+    static let stripHeight: CGFloat = 400
 
     private var windows: [OverlayWindow] = []
+    /// The label windows' level: see `level(windows:over:dockPID:)`.
+    var level = MissionControlLabelOverlay.defaultLevel {
+        didSet { for window in windows { window.level = NSWindow.Level(rawValue: level) } }
+    }
     /// Whether the label windows belong to every desktop: see `showOnEveryDesktop`.
     private var onEveryDesktop = true
     private var lastRaise: TimeInterval = 0
@@ -169,7 +175,7 @@ final class MissionControlLabelOverlay {
 
     private func window(for screen: CGRect) -> OverlayWindow {
         if let existing = windows.first(where: { $0.axScreen == screen }) { return existing }
-        let window = OverlayWindow(screen: screen)
+        let window = OverlayWindow(screen: screen, level: level)
         window.joinsEveryDesktop(onEveryDesktop)
         windows.append(window)
         return window
@@ -177,6 +183,78 @@ final class MissionControlLabelOverlay {
 }
 
 // MARK: - OverlayWindow
+
+// MARK: - Level
+
+/// A window on screen as the window server lists it, which needs no Screen Recording permission: its layer, its
+/// owner and its bounds in AX coordinates; and its name, where the listing gives one.
+struct ListedWindow: Equatable {
+    let layer: Int
+    let owner: String
+    let pid: pid_t
+    let bounds: CGRect
+    let name: String?
+
+    /// Every window on screen, front to back; nil when the window server lists none.
+    static func onScreen() -> [ListedWindow]? {
+        guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
+        else { return nil }
+        return info.compactMap { entry in
+            guard let layer = entry[kCGWindowLayer as String] as? Int,
+                  let pid = entry[kCGWindowOwnerPID as String] as? pid_t,
+                  let bounds = (entry[kCGWindowBounds as String] as? NSDictionary)
+                    .flatMap({ CGRect(dictionaryRepresentation: $0 as CFDictionary) })
+            else { return nil }
+            return ListedWindow(layer: layer, owner: entry[kCGWindowOwnerName as String] as? String ?? "?", pid: pid,
+                                bounds: bounds, name: entry[kCGWindowName as String] as? String)
+        }
+    }
+}
+
+extension MissionControlLabelOverlay {
+
+    /// The label windows' level without a better one: over everything.
+    static let defaultLevel = Int(CGWindowLevelForKey(.screenSaverWindow)) + 1
+    /// How far down a screen's top windows lie entirely to count as the menu bar's: the bar and its status items.
+    static let menuBarDepth: CGFloat = 50
+
+    /// The label windows' level, from the `windows` on screen and the bars' `areas`: just above the Dock's highest
+    /// window there, which holds the Spaces Bar and what Mission Control draws, and below the menu bar's windows,
+    /// or the main menu's level where none shows. As Mission Control closes, macOS brings the menu bar back over its
+    /// captions; there, it covers the labels too. `defaultLevel` with no list, no Dock window there or no room.
+    static func level(
+        windows: [ListedWindow]?, over areas: [CGRect], dockPID: pid_t
+    ) -> (level: Int, reason: String) {
+        guard let windows else { return (defaultLevel, "kept: no window list") }
+        let over = windows.filter { window in areas.contains { $0.intersects(window.bounds) } }
+        guard let dock = over.filter({ $0.pid == dockPID }).map(\.layer).max() else {
+            return (defaultLevel, "kept: no Dock window over the bar")
+        }
+        let menuBar = over.filter { window in
+            window.pid != dockPID && window.layer > 0 && areas.contains {
+                $0.minY <= window.bounds.minY && window.bounds.maxY <= $0.minY + menuBarDepth
+                    && $0.intersects(window.bounds)
+            }
+        }
+        let ceiling = (menuBar.map(\.layer) + [Int(CGWindowLevelForKey(.mainMenuWindow))]).min() ?? dock
+        guard dock + 1 < ceiling else {
+            return (defaultLevel, "kept: no room between the Dock's layer \(dock) and the menu bar's \(ceiling)")
+        }
+        return (dock + 1, "above the Dock's layer \(dock), below the menu bar's \(ceiling)")
+    }
+
+    /// `windows` over the bars' `areas`, for the debug recording: each one off the normal layer as "layer owner
+    /// "name" x,y,w,h", front to back, and how many more are on it.
+    static func describe(_ windows: [ListedWindow], over areas: [CGRect]) -> String {
+        let over = windows.filter { window in areas.contains { $0.intersects(window.bounds) } }
+        let raised = over.filter { $0.layer != 0 }.map { window in
+            let bounds = window.bounds
+            return "\(window.layer) \(window.owner)" + (window.name.map { " \"\($0)\"" } ?? "")
+                + String(format: " %.0f,%.0f,%.0f,%.0f", bounds.minX, bounds.minY, bounds.width, bounds.height)
+        }
+        return (raised + ["+\(over.count - raised.count) at layer 0"]).joined(separator: "; ")
+    }
+}
 
 /// A transparent strip along the top of one screen, tall enough for hover-expanded thumbnails.
 private final class OverlayWindow: NSWindow {
@@ -198,23 +276,22 @@ private final class OverlayWindow: NSWindow {
     /// Changed a little each frame while a slide runs, so the window server redraws the window.
     private let nudgeLayer = CALayer()
     private var nudged = false
-    private static let stripHeight: CGFloat = 400
     private static let slideKey = "slide"
     private static let shiftKey = "shift"
     /// Keyframes per slide: one every 4-6ms, finer than a frame.
     private static let slideSteps = 60
 
-    init(screen: CGRect) {
+    init(screen: CGRect, level: Int) {
         self.axScreen = screen
         let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
-        let height = min(Self.stripHeight, screen.height)
+        let height = min(MissionControlLabelOverlay.stripHeight, screen.height)
         let frame = CGRect(
             x: screen.minX,
             y: primaryTop - screen.minY - height,
             width: screen.width,
             height: height)
         super.init(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
-        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.screenSaverWindow)) + 1)
+        self.level = NSWindow.Level(rawValue: level)
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
@@ -565,7 +642,7 @@ private final class LabelLayer: CALayer {
         }
         if stripFace?.strip !== face.strip { contents = face.strip }
         stripFace = face
-        contentsRect = face.crop
+        contentsRect = face.contentsRect
         let layout = face.layout
         bounds = CGRect(origin: .zero, size: layout.size)
         stripName.contents = face.name

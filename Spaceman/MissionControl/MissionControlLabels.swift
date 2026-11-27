@@ -56,6 +56,8 @@ final class MissionControlLabels {
     /// Each display's bar of names as the Dock last reported it, moved to rest: Mission Control opens on these,
     /// though a session may have ended with a bar grown into thumbnails.
     private var namesRows: [CGDirectDisplayID: BarLayout] = [:]
+    /// Each display's bar of names as last written to disk.
+    private var savedNamesRows: [CGDirectDisplayID: NamesRowStore.Stored] = [:]
     /// The Dock reader's measurement last seen, to notice a new one.
     var layoutsVersion = 0
     /// The bar's retraction as last drawn.
@@ -86,6 +88,12 @@ final class MissionControlLabels {
     var grow: (screen: CGRect, reference: TimeInterval, from: BarLayout, to: BarLayout)?
     /// The pointer has entered a bar of names, and the Dock is about to grow it.
     var pendingGrow: (time: TimeInterval, bar: BarLayout)?
+    /// The thumbnails the Dock grew bars of names into, by `grownKey`, with where the pointer entered: kept for the
+    /// run. Where the Dock puts them depends on where the pointer enters in a way not worked out; the same entry
+    /// gives the same thumbnails (filmed on macOS 26.7, across launches).
+    var grownLayouts: [String: GrownLayout] = [:]
+    /// The grow under way's `grownKey` and where the pointer entered, until the Dock reports its thumbnails.
+    private var growEntry: (key: String, x: CGFloat)?
     /// Each display's thumbnails as the Dock last laid them out, moved to the middle of the screen, by
     /// display and number of thumbnails: where they go as the bar grows, or as a desktop comes or goes.
     var expandedLayoutsByCount: [String: BarLayout] = [:]
@@ -123,6 +131,8 @@ final class MissionControlLabels {
     private(set) var pointerPace = PointerPace()
     /// Each magnifying bar's hover as last drawn, by `BarMagnification.key(of:)`, for the label the hover just left.
     var hoverTrails: [String: HoverTrail] = [:]
+    /// How fast each magnifying bar's gaps between thumbnails move, by `BarMagnification.key(of:)`.
+    var gapPaces: [String: GapPace] = [:]
     /// When the window server last said Mission Control had finished closing (system uptime).
     var missionControlEndedAt: TimeInterval?
 
@@ -305,6 +315,7 @@ final class MissionControlLabels {
             CaptionStripStore.load { [weak self] stored in self?.captionStrips.adopt(stored) }
             BarMagnificationStore.load { [weak self] stored in self?.magnification.adopt(stored) }
             CaptionLookStore.load { [weak self] stored in self?.adoptLooks(stored) }
+            NamesRowStore.load { [weak self] stored in self?.adoptNamesRows(stored) }
         }
 
         // Start if already enabled
@@ -354,6 +365,7 @@ final class MissionControlLabels {
         apps = [:]
         restingLayouts = []
         namesRows = [:]
+        savedNamesRows = [:]
         closedBackgrounds = [:]
         closedBackgroundsReadAt = nil
         showingWindowManagerLabels = false
@@ -363,6 +375,8 @@ final class MissionControlLabels {
         if timer != nil, Self.spacesBarIsInDock {
             swipe.stop()
             swipe.start()
+            // The bars of names as last kept, checked against the screens and spaces as they are now.
+            NamesRowStore.load { [weak self] stored in self?.adoptNamesRows(stored) }
         }
     }
 
@@ -469,10 +483,35 @@ final class MissionControlLabels {
         pointer = (trackingStarted, Self.axPoint(NSEvent.mouseLocation))
         pointerPace = PointerPace()
         hoverTrails = [:]
+        gapPaces = [:]
         clock.start()
         record(String(format: "tracking began in %.1fms", (ProcessInfo.processInfo.systemUptime - trackingStarted)
                       * 1000))
+        settleOverlayLevel(at: "tracking began", dockPID: pid, screens: screens)
         tick()
+    }
+
+    /// Lists the windows over the bars off the main thread and, `choosing`, puts the label windows at the level they
+    /// give; noting both in the recording, as at `moment`.
+    func settleOverlayLevel(
+        at moment: String, dockPID: pid_t? = nil, screens: [ScreenInfo] = ScreenInfo.current(), choosing: Bool = true
+    ) {
+        guard let pid = dockPID ?? apps["com.apple.dock"]?.pid else { return }
+        let areas = screens.map { screen in
+            CGRect(origin: screen.frame.origin, size: CGSize(
+                width: screen.frame.width, height: min(MissionControlLabelOverlay.stripHeight, screen.frame.height)))
+        }
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            let windows = ListedWindow.onScreen()
+            let chosen = MissionControlLabelOverlay.level(windows: windows, over: areas, dockPID: pid)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if choosing { self.overlay.level = chosen.level }
+                self.record("windows over the bar (\(moment)): "
+                            + (windows.map { MissionControlLabelOverlay.describe($0, over: areas) } ?? "no list"))
+                self.record("overlay level \(chosen.level) \(choosing ? "chosen" : "would be"): \(chosen.reason)")
+            }
+        }
     }
 
     /// Matches the layouts kept from earlier sessions afresh, in this session's style and with the names
@@ -484,6 +523,37 @@ final class MissionControlLabels {
             layout.rematched(labelsUnnamed: labelsUnnamed, storedNames: storedNames)
         }
         restingLayouts = Self.openingLayouts(kept: restingLayouts, namesRows: namesRows).map(rematch)
+    }
+
+    /// Takes the bars of names read from disk, for displays this run has seen none on, where their screens and
+    /// spaces are as they were: the first opening after a launch slides in on them.
+    private func adoptNamesRows(_ stored: [String: NamesRowStore.Stored]) {
+        var adopted = 0
+        for screen in ScreenInfo.current() where namesRows[screen.displayID] == nil {
+            guard let uuid = screen.uuid,
+                  let kept = stored[NamesRowStore.file(display: uuid, screen: screen.frame.size)],
+                  let layout = NamesRowStore.layout(
+                    kept, on: screen, spaceIDs: Self.orderedSpaceIDs(displayUUID: uuid))
+            else { continue }
+            namesRows[screen.displayID] = layout
+            savedNamesRows[screen.displayID] = kept
+            adopted += 1
+        }
+        if restingLayouts.isEmpty, !isTracking {
+            restingLayouts = namesRows.values.sorted { $0.screen.minX < $1.screen.minX }
+        }
+        record("bars of names kept from before: \(adopted)")
+    }
+
+    /// Writes each display's bar of names that changed since it was last written.
+    private func saveNamesRows() {
+        let uuids = Dictionary(ScreenInfo.current().map { ($0.displayID, $0.uuid) }) { first, _ in first }
+        for (displayID, layout) in namesRows {
+            let stored = NamesRowStore.stored(layout)
+            guard stored != savedNamesRows[displayID], let uuid = uuids[displayID] ?? nil else { continue }
+            savedNamesRows[displayID] = stored
+            NamesRowStore.save(stored, file: NamesRowStore.file(display: uuid, screen: layout.screen.size))
+        }
     }
 
     /// The bars Mission Control opens on: those `kept` from the last session, each grown into thumbnails as
@@ -525,25 +595,28 @@ final class MissionControlLabels {
     }
 
     /// Replays the bar growing, just before the Dock starts it, if the pointer is still in the bar and
-    /// an earlier expansion showed where the thumbnails go: the hovered desktop's under the pointer,
-    /// or all of them in the middle when the pointer is past the names.
+    /// an earlier expansion showed where the thumbnails go (see `grownLayout`).
     private func startGrowIfDue(_ pending: (time: TimeInterval, bar: BarLayout), reading: DockReader.Reading,
                                 frameTime: TimeInterval) {
         guard frameTime + clock.frameDuration >= pending.time + DockMotion.expand.delay else { return }
         pendingGrow = nil
         let bar = pending.bar
         guard let point = pointer?.point, bar.frame.contains(point), slide == nil else { return }
+        let entry = Self.grownKey(entering: bar, at: point.x).map { (key: $0, x: point.x) }
         var to: BarLayout
         if let reported = reading.layouts.first(where: {
             $0.screen == bar.screen && $0.frame.height > Self.expandedBarHeight
         }) {
             to = reported.atRest()
+            if let entry { grownLayouts[entry.key] = GrownLayout(layout: to, enteredAt: entry.x) }
+            growEntry = nil
         } else {
-            // Where as many thumbnails went last time: the places, not the spaces, which may since have moved.
-            guard let layout = expandedLayoutsByCount["\(bar.displayID)|\(bar.buttons.count)"] else { return }
-            let hovered = bar.buttons.firstIndex { $0.frame.minX <= point.x && point.x <= $0.frame.maxX }
-            let dx = hovered.map { point.x - layout.buttons[$0].frame.midX } ?? 0
-            to = layout.offsetBy(dx: dx).placing(bar)
+            guard let layout = Self.grownLayout(
+                entering: bar, at: point.x, learned: grownLayouts,
+                lastGrown: expandedLayoutsByCount["\(bar.displayID)|\(bar.buttons.count)"])
+            else { return }
+            to = layout.placing(bar)
+            growEntry = entry
         }
         // The names as they are now.
         to.captions = to.captions.map { caption in
@@ -555,6 +628,36 @@ final class MissionControlLabels {
         }
         grow = (bar.screen, pending.time, bar, to)
         record("grow", at: pending.time + DockMotion.expand.delay)
+    }
+
+    /// Where the thumbnails go as `bar` of names grows, the pointer having entered it at `x`, before the Dock reports
+    /// them: as they went for an entry nearest the same name, moved with the pointer, where one was `learned`; else
+    /// as they went `lastGrown` (centred), with the thumbnail of the name nearest the pointer under it, or all in the
+    /// middle when the pointer is past the names. Nil with neither.
+    static func grownLayout(
+        entering bar: BarLayout, at x: CGFloat, learned: [String: GrownLayout], lastGrown: BarLayout?
+    ) -> BarLayout? {
+        if let key = grownKey(entering: bar, at: x), let kept = learned[key] {
+            return kept.layout.offsetBy(dx: x - kept.enteredAt)
+        }
+        guard let lastGrown else { return nil }
+        guard let place = nearestName(on: bar, to: x), lastGrown.buttons.indices.contains(place) else {
+            return lastGrown
+        }
+        return lastGrown.offsetBy(dx: x - lastGrown.buttons[place].frame.midX)
+    }
+
+    /// Where the thumbnails `bar` of names grows into are kept: by display, number of thumbnails and the name
+    /// nearest where the pointer entered at `x`. Nil past the names.
+    static func grownKey(entering bar: BarLayout, at x: CGFloat) -> String? {
+        nearestName(on: bar, to: x).map { "\(bar.displayID)|\(bar.buttons.count)|\($0)" }
+    }
+
+    /// The place of the name on `bar` nearest `x`; nil past the first's or the last's outer edge.
+    private static func nearestName(on bar: BarLayout, to x: CGFloat) -> Int? {
+        let frames = bar.buttons.map(\.frame)
+        guard let first = frames.first, let last = frames.last, first.minX <= x, x <= last.maxX else { return nil }
+        return frames.indices.min { abs(frames[$0].midX - x) < abs(frames[$1].midX - x) }
     }
 
     /// A replayed growth is over once it has run and the Dock reports the thumbnails, or once the
@@ -575,6 +678,7 @@ final class MissionControlLabels {
         shift = nil
         grow = nil
         pendingGrow = nil
+        growEntry = nil
         reflow = nil
         spaceChangeBeganAt = nil
         pendingChange = nil
@@ -593,6 +697,7 @@ final class MissionControlLabels {
         overlay.hide()
         recordDrawn(at: ProcessInfo.processInfo.systemUptime)
         retraction = 1
+        saveNamesRows()
         swipe.settle()
         logOutcome("Spaces Bar not found")
     }
@@ -643,6 +748,9 @@ final class MissionControlLabels {
         take(reading)
         if let shot = shotStrip { finishStripCapture(shot, reading: reading) }
         learnMagnification(from: reading, at: now)
+        for bar in reading.layouts where magnification.magnifies(bar) {
+            gapPaces[BarMagnification.key(of: bar), default: GapPace()].note(bar, at: reading.time)
+        }
         watchCaptions(frameTime: frameTime)
         if let pending = pendingGrow { startGrowIfDue(pending, reading: reading, frameTime: frameTime) }
         if let running = grow, growIsOver(running, reading: reading, frameTime: frameTime) { grow = nil }
@@ -671,7 +779,10 @@ final class MissionControlLabels {
         let dock: CGFloat? = reading.barFrame.flatMap { barFrame in
             layouts.first.map { Self.retraction(bar: barFrame, screen: $0.screen) }
         }
-        if dock != nil { sawBar = true }
+        if dock != nil, !sawBar {
+            sawBar = true
+            settleOverlayLevel(at: "bar in")
+        }
         if swipe.gesture != confirmedGesture, swipe.state != .idle, dockTookSwipe(dock: dock) {
             confirmedGesture = swipe.gesture
         }
@@ -744,6 +855,10 @@ final class MissionControlLabels {
                 }) {
                     // The Dock reports the thumbnails it is growing: take their places from it.
                     var to = reported.atRest()
+                    if let entry = growEntry {
+                        grownLayouts[entry.key] = GrownLayout(layout: to, enteredAt: entry.x)
+                        growEntry = nil
+                    }
                     to.captions = running.to.captions.count == to.captions.count ? to.captions : running.to.captions
                     grow?.to = to
                 } else {
@@ -953,7 +1068,7 @@ final class MissionControlLabels {
         }
         if !timed.isFinished(at: frameTime) {
             // A close turned back: the Dock reports the bar coming back in.
-            if closing, timed.timing != DockMotion.choose, let dock, dock <= Self.restSlack,
+            if closing, !Self.clickTimings.contains(timed.timing), let dock, dock <= Self.restSlack,
                reading.time > timed.reference {
                 let reverse = TimedSlide(timing: DockMotion.reverse, reference: readingChangedAt,
                                          from: timed.retraction(at: readingChangedAt), to: 0)
@@ -977,6 +1092,9 @@ final class MissionControlLabels {
         return .gone
     }
 
+    /// Closes timed from a click, which the Dock may still report at rest just after: never turned back.
+    static let clickTimings = [DockMotion.choose, DockMotion.clickClose]
+
     /// Starts replaying the close the Dock has just begun, timed from `reference`.
     private func startClose(reference: TimeInterval, frameTime: TimeInterval) -> Placement {
         let expanded = (restingLayouts.first?.frame.height ?? 0) > Self.expandedBarHeight
@@ -984,6 +1102,7 @@ final class MissionControlLabels {
                                reference: reference, from: retraction, to: 1)
         slide = close
         record(expanded ? "close expanded" : "close", at: reference)
+        settleOverlayLevel(at: "closing", choosing: false)
         return .slide(close)
     }
 

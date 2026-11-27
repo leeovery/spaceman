@@ -241,3 +241,9 @@ struct Reflow {
         }
     }
 }
+
+/// Thumbnails the Dock grew a bar of names into, at rest, and how far across the pointer entered the bar.
+struct GrownLayout {
+    let layout: BarLayout
+    let enteredAt: CGFloat
+}
