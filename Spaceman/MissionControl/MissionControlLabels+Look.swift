@@ -125,23 +125,18 @@ extension MissionControlLabels {
         }
     }
 
-    /// Writes the looks in use on `screens` (`CaptionLooks.Keys.screen`) to disk, each with its background, but where
-    /// the file holds them already.
+    /// Writes the looks in use on `screens` (`CaptionLooks.Keys.screen`) to disk, each with its background.
     private func keepLooks(on screens: Set<String>) {
         for info in ScreenInfo.current() {
             let screen = CaptionLooks.screenKey(info.frame)
             guard screens.contains(screen), let uuid = info.uuid, let looks = captionLooks.screenLooks(screen)
             else { continue }
-            let file = CaptionLookStore.file(display: uuid, screen: info.frame.size)
-            guard writtenLooks[file]?.holdsSame(as: looks) != true else { continue }
-            writtenLooks[file] = looks
-            CaptionLookStore.save(looks, file: file)
+            CaptionLookStore.save(looks, file: CaptionLookStore.file(display: uuid, screen: info.frame.size))
         }
     }
 
     /// Takes the looks read from disk at launch, for the screens as they are, over what they show now.
     func adoptLooks(_ stored: [String: CaptionLooks.ScreenLooks]) {
-        writtenLooks.merge(stored) { written, _ in written }
         let taken = captionLooks.adopt(
             stored, screens: ScreenInfo.current(), current: CaptionLooks.currentBackgrounds())
         record("caption looks kept from before: \(taken) taken")

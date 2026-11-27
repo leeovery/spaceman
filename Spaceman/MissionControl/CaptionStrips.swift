@@ -349,14 +349,19 @@ enum CaptionStripStore {
         let background: String
     }
 
-    /// Writes `strip` in place of the one kept for `key`.
+    /// What each file holds, as read or written: on the caches' queue only.
+    private static var written = WrittenFiles<CaptionStrip> { $0.holdsSame(as: $1) }
+
+    /// Writes `strip` in place of the one kept for `key`, unless that is it already.
     static func save(_ strip: CaptionStrip, key: String) {
-        CacheFiles.write(key, in: folder) { encode(strip) }
+        CacheFiles.later {
+            written.write(strip, as: key) { CacheFiles.store(encode($0), as: key, in: folder) }
+        }
     }
 
     /// Reads every strip kept, by key, and hands them to `done` on the main thread.
     static func load(_ done: @escaping ([String: CaptionStrip]) -> Void) {
-        CacheFiles.readAll(in: folder, decode: decode, done: done)
+        CacheFiles.readAll(in: folder, decode: decode, noting: { written.read($0) }, done: done)
     }
 
     static func encode(_ strip: CaptionStrip) -> Data? {

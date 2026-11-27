@@ -25,21 +25,32 @@ enum CacheFiles {
 
     /// Writes what `encode` gives, worked out off the main thread, as `file` in the folder `name`.
     static func write(_ file: String, in name: String, _ encode: @escaping () -> Data?) {
-        queue.async {
-            guard let folder = folder(name), let data = encode() else { return }
-            do {
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                try data.write(to: folder.appendingPathComponent("\(file).plist"), options: .atomic)
-            } catch {
-                log.log("Couldn't keep \(file, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            }
+        queue.async { _ = store(encode(), as: file, in: name) }
+    }
+
+    /// Runs `work` off the main thread, in order with the reads and writes.
+    static func later(_ work: @escaping () -> Void) {
+        queue.async(execute: work)
+    }
+
+    /// Writes `data` as `file` in the folder `name`, from the caches' queue: whether it was written.
+    static func store(_ data: Data?, as file: String, in name: String) -> Bool {
+        guard let folder = folder(name), let data else { return false }
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try data.write(to: folder.appendingPathComponent("\(file).plist"), options: .atomic)
+            return true
+        } catch {
+            log.log("Couldn't keep \(file, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
-    /// Reads every file in the folder `name` that `decode` makes sense of, by file name, and hands them to `done`
-    /// on the main thread.
+    /// Reads every file in the folder `name` that `decode` makes sense of, by file name, hands them to `noting` off
+    /// the main thread, in order with the writes, then to `done` on the main thread.
     static func readAll<Value>(
-        in name: String, decode: @escaping (Data) -> Value?, done: @escaping ([String: Value]) -> Void
+        in name: String, decode: @escaping (Data) -> Value?, noting: @escaping ([String: Value]) -> Void = { _ in },
+        done: @escaping ([String: Value]) -> Void
     ) {
         queue.async {
             var read: [String: Value] = [:]
@@ -50,6 +61,7 @@ enum CacheFiles {
                 guard let data = try? Data(contentsOf: file), let value = decode(data) else { continue }
                 read[file.deletingPathExtension().lastPathComponent] = value
             }
+            noting(read)
             DispatchQueue.main.async { done(read) }
         }
     }
@@ -73,10 +85,34 @@ enum CacheFiles {
         guard first.width == second.width, first.height == second.height,
               first.bitsPerComponent == second.bitsPerComponent, first.bitsPerPixel == second.bitsPerPixel,
               first.bytesPerRow == second.bytesPerRow, first.bitmapInfo == second.bitmapInfo,
-              first.colorSpace == second.colorSpace,
+              first.colorSpace == second.colorSpace, first.renderingIntent == second.renderingIntent,
+              first.decode == nil, second.decode == nil,
               let one = first.dataProvider?.data, let two = second.dataProvider?.data
         else { return false }
         return one as Data == two as Data
+    }
+}
+
+/// What each file of a folder last held, read or written, so a file is written only once what it would hold changes,
+/// and again after a write that failed. Used on the caches' queue only.
+struct WrittenFiles<Content> {
+
+    private var held: [String: Content] = [:]
+    private let same: (Content, Content) -> Bool
+
+    init(same: @escaping (Content, Content) -> Bool) {
+        self.same = same
+    }
+
+    /// Notes what `files` were read holding, but for those written since.
+    mutating func read(_ files: [String: Content]) {
+        held.merge(files) { written, _ in written }
+    }
+
+    /// Writes `content` as `file` by `writing`, which says whether it wrote it, unless the file holds it already.
+    mutating func write(_ content: Content, as file: String, by writing: (Content) -> Bool) {
+        if let held = held[file], same(held, content) { return }
+        if writing(content) { held[file] = content }
     }
 }
 
@@ -147,14 +183,19 @@ enum CaptionLookStore {
         "\(display)-\(Int(screen.width.rounded()))x\(Int(screen.height.rounded()))"
     }
 
-    /// Writes `looks` in place of those kept in `file`.
+    /// What each file holds, as read or written: on the caches' queue only.
+    private static var written = WrittenFiles<CaptionLooks.ScreenLooks> { $0.holdsSame(as: $1) }
+
+    /// Writes `looks` in place of those kept in `file`, unless it holds them already.
     static func save(_ looks: CaptionLooks.ScreenLooks, file: String) {
-        CacheFiles.write(file, in: folder) { encode(looks) }
+        CacheFiles.later {
+            written.write(looks, as: file) { CacheFiles.store(encode($0), as: file, in: folder) }
+        }
     }
 
     /// Reads every screen's looks kept, by file, and hands them to `done` on the main thread.
     static func load(_ done: @escaping ([String: CaptionLooks.ScreenLooks]) -> Void) {
-        CacheFiles.readAll(in: folder, decode: decode, done: done)
+        CacheFiles.readAll(in: folder, decode: decode, noting: { written.read($0) }, done: done)
     }
 
     static func encode(_ looks: CaptionLooks.ScreenLooks) -> Data? {
