@@ -19,6 +19,7 @@ diff_exclude = [
     '.press.toml',
     'SpacemanTests/**',
     'scripts/**',
+    "Spaceman.xcodeproj/project.pbxproj",
 ]
 
 [release.hooks]
