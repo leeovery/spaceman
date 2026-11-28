@@ -53,6 +53,9 @@ final class MissionControlLabels {
     /// The last session's bars, moved to rest, for a swipe that starts before the Dock reports
     /// the bar.
     var restingLayouts: [BarLayout] = []
+    /// Each display's bar of names as the Dock last reported it, moved to rest: Mission Control opens on these,
+    /// though a session may have ended with a bar grown into thumbnails.
+    private var namesRows: [CGDirectDisplayID: BarLayout] = [:]
     /// The Dock reader's measurement last seen, to notice a new one.
     var layoutsVersion = 0
     /// The bar's retraction as last drawn.
@@ -83,10 +86,11 @@ final class MissionControlLabels {
     var grow: (screen: CGRect, reference: TimeInterval, from: BarLayout, to: BarLayout)?
     /// The pointer has entered a bar of names, and the Dock is about to grow it.
     var pendingGrow: (time: TimeInterval, bar: BarLayout)?
-    /// Each display's thumbnails as the Dock last laid them out, moved to the middle of the screen.
-    private var expandedLayouts: [CGDirectDisplayID: BarLayout] = [:]
-    /// The same, by display and number of thumbnails, to know where they go as a desktop comes or goes.
+    /// Each display's thumbnails as the Dock last laid them out, moved to the middle of the screen, by
+    /// display and number of thumbnails: where they go as the bar grows, or as a desktop comes or goes.
     var expandedLayoutsByCount: [String: BarLayout] = [:]
+    /// The expanded bars found to magnify the hovered thumbnail, whose other thumbnails have no caption.
+    var magnification = BarMagnification()
     /// When the window server last said Mission Control was starting while it was already open, as it
     /// does as a desktop is added or removed.
     var spaceChangeBeganAt: TimeInterval?
@@ -114,7 +118,11 @@ final class MissionControlLabels {
     /// timing, to where the Dock puts it.
     var reflow: Reflow?
     /// The pointer's last place, in Accessibility coordinates, and when it moved there.
-    private var pointer: (time: TimeInterval, point: CGPoint)?
+    private(set) var pointer: (time: TimeInterval, point: CGPoint)?
+    /// How fast the pointer moves across the bars, noted each frame.
+    private(set) var pointerPace = PointerPace()
+    /// Each magnifying bar's hover as last drawn, by `BarMagnification.key(of:)`, for the label the hover just left.
+    var hoverTrails: [String: HoverTrail] = [:]
     /// When the window server last said Mission Control had finished closing (system uptime).
     var missionControlEndedAt: TimeInterval?
 
@@ -127,18 +135,42 @@ final class MissionControlLabels {
     /// The bars this session last captured, and whether a capture is under way.
     var capturedSignature: String?
     var isCapturing = false
-    /// Counts frames that found the bars moving, or not fully in, so a capture can tell whether
-    /// anything moved while it ran.
-    var motionCount = 0
+    /// When a frame first found the bars moving, or not fully in, while a capture ran, if one did: screens shot
+    /// after then may have caught them moving.
+    var movedAt: TimeInterval?
     /// Captures this session by the bars' signature, so captures that never agree stop retrying.
     var captureAttempts: [String: Int] = [:]
+    /// Magnifying bars' caption strips, which their labels are drawn from, whether a capture of one is under way, and
+    /// one whose shot is back, waiting on the next reading to tell whether its thumbnail moved meanwhile.
+    var captionStrips = CaptionStrips()
+    var isCapturingStrip = false
+    var shotStrip: ShotStrip?
+    /// The names drawn over strips, rendered ahead of their thumbnails' hover, and the style each strip's names were
+    /// last rendered in this session.
+    var stripNames = StripNames()
+    var preparedStyles: [String: CaptionStrip.TextStyle] = [:]
+    /// Counts frames that found the bars moving, or off their places, so a strip's capture can tell whether they
+    /// moved while it ran; and since when they have been still. Thumbnails resizing don't count.
+    var barMotionCount = 0
+    var stillSince: TimeInterval?
+    /// When followed thumbnails were last found resizing under the pointer.
+    var thumbnailsResizedAt: TimeInterval?
     /// The style this session's labels are drawn in, fixed at its start so a session never mixes them.
     var labelStyle = MissionControlLabelStyle.spaceColors
+    /// What each screen shows behind its bar, as `CaptionLooks.currentBackgrounds()` says, read while Mission
+    /// Control is closed, and when.
+    var closedBackgrounds: [String: String] = [:]
+    private var closedBackgroundsReadAt: TimeInterval?
     var requestedCaptureAccess = false
     /// Each display's current space, whose caption Mission Control puts in a pill.
     var currentSpaceIDs: Set<String> = []
     /// While debugging, the last trace of where the labels went, to log only changes.
     var lastTrace: String?
+    /// For the debug recording: which labels each bar last showed, to note only changes.
+    var lastShownRecord: String?
+    /// For the debug recording: what WindowManager and the Dock report of their Spaces Bars' buttons.
+    lazy var windowManagerProbe = SpacesBarProbe(tag: "wm", findBars: Self.windowManagerBars)
+    lazy var dockProbe = SpacesBarProbe(tag: "dockbuttons", findBars: Self.dockBars)
 
     var isEnabled: Bool {
         UserDefaults.standard.bool(forKey: MissionControlLabelStyle.namesShownKey)
@@ -172,7 +204,7 @@ final class MissionControlLabels {
     private static let openAnswerLimit: TimeInterval = 0.3
 
     /// How far off rest, as a fraction of the bar's height, still counts as at rest.
-    private static let restSlack: CGFloat = 0.05
+    static let restSlack: CGFloat = 0.05
 
     /// Bars taller than this show thumbnails.
     static let expandedBarHeight: CGFloat = 60
@@ -184,6 +216,9 @@ final class MissionControlLabels {
 
     /// Fraction of interval the poll may be late.
     private static let pollToleranceFraction = 0.2
+
+    /// How often to read what the screens show behind their bars while Mission Control is closed.
+    private static let backgroundsInterval: TimeInterval = 1
 
     /// Timeout for AX calls, so a busy or hung process cannot stall Spaceman for long.
     static let axMessagingTimeout: Float = 0.1
@@ -208,13 +243,15 @@ final class MissionControlLabels {
             self?.apps = self?.apps.filter { $0.value.pid != app.processIdentifier } ?? [:]
         }
 
-        // Listen for preference changes (only .standard, not other suites)
+        // Listen for preference changes (only .standard, not other suites). Not on queue .main: that makes
+        // the posting thread wait for the main thread, and the name store writes defaults from a background
+        // thread inside a barrier that the main thread can be waiting on, which deadlocked the app.
         NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: UserDefaults.standard,
-            queue: .main
+            queue: nil
         ) { [weak self] _ in
-            self?.handlePreferenceChange()
+            DispatchQueue.main.async { self?.handlePreferenceChange() }
         }
 
         // After sleep/wake or lock/unlock the cached AX elements and label windows can stop
@@ -244,12 +281,15 @@ final class MissionControlLabels {
         }
 
         // Switching spaces with Mission Control open moves the pill to the new space's caption, and the
-        // labels, kept to the desktop they opened on, move to the new one.
+        // labels, kept to the desktop they opened on, move to the new one. The new space may show another
+        // wallpaper: what the screens show is read again as soon as Mission Control is closed.
         workspaceCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             guard let self else { return }
             self.currentSpaceIDs = Self.currentSpaceIDs()
+            self.closedBackgroundsReadAt = nil
+            self.readBackgroundsSoon()
             if self.isTracking, self.keptToThisDesktop, self.zoom == nil {
                 self.overlay.showOnEveryDesktop(true)
                 self.keptToThisDesktop = false
@@ -263,6 +303,12 @@ final class MissionControlLabels {
         swipe.onSwipe = { [weak self] in self?.beginTracking() }
         swipe.onClick = { [weak self] point in self?.handleClick(at: point) }
         swipe.onDrop = { [weak self] point in self?.handleDrop(at: point) }
+
+        if Self.spacesBarIsInDock {
+            CaptionStripStore.load { [weak self] stored in self?.captionStrips.adopt(stored) }
+            BarMagnificationStore.load { [weak self] stored in self?.magnification.adopt(stored) }
+            CaptionLookStore.load { [weak self] stored in self?.adoptLooks(stored) }
+        }
 
         // Start if already enabled
         if isEnabled {
@@ -288,6 +334,7 @@ final class MissionControlLabels {
         pollTimer.tolerance = interval * Self.pollToleranceFraction
         RunLoop.main.add(pollTimer, forMode: .common)
         timer = pollTimer
+        readBackgroundsIfDue()
         if Self.spacesBarIsInDock { swipe.start() }
         requestCaptureAccessIfNeeded()
         MissionControlMotionRecorder.shared.start()
@@ -309,6 +356,9 @@ final class MissionControlLabels {
         overlay.close()
         apps = [:]
         restingLayouts = []
+        namesRows = [:]
+        closedBackgrounds = [:]
+        closedBackgroundsReadAt = nil
         showingWindowManagerLabels = false
         lastMismatch = nil
         lastOutcome = nil
@@ -317,6 +367,8 @@ final class MissionControlLabels {
             swipe.stop()
             swipe.start()
         }
+        // Read now, while closed, so an opening before the next poll doesn't have to.
+        readBackgroundsSoon()
     }
 
     /// Logs the outcome only when it changes, to avoid flooding the log on every frame.
@@ -347,8 +399,9 @@ final class MissionControlLabels {
         // Listening for swipes needs Accessibility, which may have been granted since launch.
         if Self.spacesBarIsInDock { swipe.start() }
 
-        // macOS 27+: WindowManager (but may also work on 26.5+)
-        if let windowManager = appElement("com.apple.WindowManager") {
+        // macOS 27+: WindowManager. macOS 26.7's WindowManager shows the Spaces Bar too, at its resting place
+        // from the first moment of a swipe, so on 26 the Dock alone is followed.
+        if !Self.spacesBarIsInDock, let windowManager = appElement("com.apple.WindowManager") {
             let bars = AX.spacesBars(in: windowManager, depthLimit: 2) {
                 AX.identifier(of: $0) == "mc.spaces"
             }
@@ -382,10 +435,39 @@ final class MissionControlLabels {
             beginTracking()
         } else {
             logOutcome("Spaces Bar not found")
+            readBackgroundsIfDue()
         }
     }
 
     // MARK: - Dock tracking
+
+    /// Reads what the screens show behind their bars, at most every `backgroundsInterval`, for the native look.
+    /// Never as Mission Control opens: each read asks another process, 1.5-5ms at rest and maybe much longer while
+    /// the system is busy opening it, and nothing should hold up the labels' first frame.
+    private func readBackgroundsIfDue() {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard Self.spacesBarIsInDock,
+              Self.backgroundsDue(at: now, readAt: closedBackgroundsReadAt, tracking: isTracking),
+              MissionControlLabelStyle.current() == .nativeLook
+        else { return }
+        closedBackgroundsReadAt = now
+        closedBackgrounds = CaptionLooks.currentBackgrounds()
+    }
+
+    /// Reads what the screens show once this turn of the run loop is done, if it is due then and the labels are on: a
+    /// turn that ends tracking can begin it again straight away, as a fresh open does.
+    private func readBackgroundsSoon() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.timer != nil else { return }
+            self.readBackgroundsIfDue()
+        }
+    }
+
+    /// Whether what the screens show is due to be read at `now`, last read at `readAt`, or not since a Space switch,
+    /// nor ever (nil): every `backgroundsInterval`, and never while Mission Control is being tracked.
+    static func backgroundsDue(at now: TimeInterval, readAt: TimeInterval?, tracking: Bool) -> Bool {
+        !tracking && now - (readAt ?? -.infinity) >= backgroundsInterval
+    }
 
     func beginTracking() {
         guard !isTracking, Self.spacesBarIsInDock, AXIsProcessTrusted(),
@@ -393,17 +475,68 @@ final class MissionControlLabels {
         else { return }
         isTracking = true
         trackingStarted = ProcessInfo.processInfo.systemUptime
-        beginLookSession()
+        let screens = ScreenInfo.current()
+        overlay.prepare(screens: screens.map(\.frame))
+        beginLookSession(screens: screens)
+        magnification.interrupt()
+        rematchKeptLayouts()
         sawBar = false
         latestReadingTime = 0
         previousReadingTime = 0
         currentSpaceIDs = Self.currentSpaceIDs()
         lastMismatch = nil
         layoutsVersion = 0
-        reader.begin(dockPID: pid, screens: ScreenInfo.current())
+        reader.begin(dockPID: pid, screens: screens, labelsUnnamed: labelStyle.labelsUnnamed)
         pointer = (trackingStarted, Self.axPoint(NSEvent.mouseLocation))
+        pointerPace = PointerPace()
+        hoverTrails = [:]
         clock.start()
+        record(String(format: "tracking began in %.1fms", (ProcessInfo.processInfo.systemUptime - trackingStarted)
+                      * 1000))
+        noteWindowsOverBars(at: "tracking began", dockPID: pid, screens: screens)
         tick()
+    }
+
+    /// Lists the windows over the bars off the main thread and notes them in the recording, as at `moment`, with the
+    /// level they would give the label windows. Only noted: under the menu bar's level macOS moves a window below
+    /// the menu bar, and the list at tracking start lacks Mission Control's windows, so applying it put the labels
+    /// 30pt low and under Mission Control (filmed 2026-11-27). Skipped without the recording: the list asks the
+    /// window server.
+    func noteWindowsOverBars(at moment: String, dockPID: pid_t? = nil, screens: [ScreenInfo]? = nil) {
+        guard MissionControlMotionRecorder.isEnabled, let pid = dockPID ?? apps["com.apple.dock"]?.pid else { return }
+        let areas = (screens ?? ScreenInfo.current()).map { screen in
+            CGRect(origin: screen.frame.origin, size: CGSize(
+                width: screen.frame.width, height: min(MissionControlLabelOverlay.stripHeight, screen.frame.height)))
+        }
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            let windows = ListedWindow.onScreen()
+            let chosen = MissionControlLabelOverlay.level(windows: windows, over: areas, dockPID: pid)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.record("windows over the bar (\(moment)): "
+                            + (windows.map { MissionControlLabelOverlay.describe($0, over: areas) } ?? "no list"))
+                self.record("overlay level \(chosen.level) would be: \(chosen.reason)")
+            }
+        }
+    }
+
+    /// Matches the layouts kept from earlier sessions afresh, in this session's style and with the names
+    /// stored now: an opening slide replays them before the Dock answers, and the style may have changed.
+    private func rematchKeptLayouts() {
+        let labelsUnnamed = labelStyle.labelsUnnamed
+        let storedNames = SpaceNameStore.shared.loadAll()
+        let rematch = { (layout: BarLayout) in
+            layout.rematched(labelsUnnamed: labelsUnnamed, storedNames: storedNames)
+        }
+        restingLayouts = Self.openingLayouts(kept: restingLayouts, namesRows: namesRows).map(rematch)
+    }
+
+    /// The bars Mission Control opens on: those `kept` from the last session, each grown into thumbnails as
+    /// it ended back to its bar of names, as `namesRows` last had it, where that is known.
+    static func openingLayouts(kept: [BarLayout], namesRows: [CGDirectDisplayID: BarLayout]) -> [BarLayout] {
+        kept.map { layout in
+            layout.frame.height > expandedBarHeight ? namesRows[layout.displayID] ?? layout : layout
+        }
     }
 
     static func axPoint(_ point: NSPoint) -> CGPoint {
@@ -436,37 +569,82 @@ final class MissionControlLabels {
         record(String(format: "pointer into the bar at x %.0f", point.x), at: time)
     }
 
-    /// Replays the bar growing, just before the Dock starts it, if the pointer is still in the bar and
-    /// an earlier expansion showed where the thumbnails go: the hovered desktop's under the pointer,
-    /// or all of them in the middle when the pointer is past the names.
+    /// Replays the bar growing if the pointer is still in the bar, from as early as `growStart` allows: where the
+    /// Dock reports the thumbnails going, or failing that where an earlier expansion showed them, the hovered
+    /// desktop's under the pointer, or all of them in the middle when the pointer is past the names.
     private func startGrowIfDue(_ pending: (time: TimeInterval, bar: BarLayout), reading: DockReader.Reading,
                                 frameTime: TimeInterval) {
-        guard frameTime + clock.frameDuration >= pending.time + DockMotion.expand.delay else { return }
-        pendingGrow = nil
         let bar = pending.bar
-        guard let point = pointer?.point, bar.frame.contains(point), slide == nil else { return }
-        var to: BarLayout
-        if let reported = reading.layouts.first(where: {
+        let reported = reading.layouts.first {
             $0.screen == bar.screen && $0.frame.height > Self.expandedBarHeight
-        }) {
-            to = reported.atRest()
-        } else {
-            guard let layout = expandedLayouts[bar.displayID],
-                  layout.captions.map(\.covers) == bar.captions.map(\.covers)
-            else { return }
-            let hovered = bar.buttons.first { $0.frame.minX <= point.x && point.x <= $0.frame.maxX }
-            let dx = hovered.flatMap { button in layout.buttons.first { $0.title == button.title } }
-                .map { point.x - $0.frame.midX } ?? 0
-            to = layout.offsetBy(dx: dx)
         }
-        // The names as they are now, at the thumbnails' places.
+        let known = Self.knownLayout(of: bar.buttons.count, on: bar, in: expandedLayoutsByCount)
+        let start = Self.growStart(at: frameTime, frameDuration: clock.frameDuration, entered: pending.time,
+                                   reported: reported != nil, known: known != nil,
+                                   magnifies: Self.growMagnifies(onto: reported, known: known, by: magnification))
+        guard start != .wait else { return }
+        pendingGrow = nil
+        guard start == .start, let point = pointer?.point, bar.frame.contains(point), slide == nil else { return }
+        var to: BarLayout
+        if let reported {
+            to = reported.atRest()
+        } else if let layout = known {
+            // Where as many thumbnails went last time: the places, not the spaces, which may since have moved.
+            let hovered = bar.buttons.firstIndex { $0.frame.minX <= point.x && point.x <= $0.frame.maxX }
+            let dx = hovered.map { point.x - layout.buttons[$0].frame.midX } ?? 0
+            to = layout.offsetBy(dx: dx).placing(bar)
+        } else {
+            return
+        }
+        // The names as they are now.
         to.captions = to.captions.map { caption in
-            guard let now = bar.captions.first(where: { $0.covers == caption.covers }) else { return caption }
-            return Caption(centre: caption.centre, maxWidth: caption.maxWidth, covers: caption.covers,
-                           name: now.name, colorHex: now.colorHex, spaceID: now.spaceID)
+            guard var now = bar.captions.first(where: { $0.spaceID == caption.spaceID }) else { return caption }
+            now.centre = caption.centre
+            now.maxWidth = caption.maxWidth
+            now.index = caption.index
+            return now
         }
         grow = (bar.screen, pending.time, bar, to)
         record("grow", at: pending.time + DockMotion.expand.delay)
+    }
+
+    /// Whether a bar of names grows into thumbnails known to magnify, by `magnification`, whatever the labels' style:
+    /// as the Dock has `reported` them, or failing that as an earlier expansion laid them out (`known`).
+    static func growMagnifies(onto reported: BarLayout?, known: BarLayout?, by magnification: BarMagnification)
+        -> Bool {
+        (reported ?? known).map(magnification.magnifies) ?? false
+    }
+
+    /// Where `count` thumbnails went when the Dock last laid them out on `bar`'s display, of `layouts`
+    /// (`expandedLayoutsByCount`): only while its screen is where it was then, their frames being on it.
+    static func knownLayout(of count: Int, on bar: BarLayout, in layouts: [String: BarLayout]) -> BarLayout? {
+        layouts["\(bar.displayID)|\(count)"].flatMap { $0.screen == bar.screen ? $0 : nil }
+    }
+
+    enum GrowStart { case wait, start, giveUp }
+
+    /// Whether to start replaying the grow of a bar of names the pointer entered at `entered`, in the frame reaching
+    /// the screen at `frameTime`, the Dock having `reported` where the thumbnails go or an earlier expansion having
+    /// shown it (`known`). Onto thumbnails known to magnify, two frames before macOS's captions start riding down,
+    /// with the Dock's report, so the labels' move is on the screen before it starts: the first frame of a ride
+    /// started later has been filmed reaching the screen a frame late, the captions already moving. Without the
+    /// report, a frame later on what is known; with neither, the report is awaited until the thumbnails start
+    /// growing. Onto any other bar, whose labels stay on the names until the thumbnails grow, the frame before they
+    /// do: the ride's timing was fitted on magnifying bars only.
+    static func growStart(
+        at frameTime: TimeInterval, frameDuration: TimeInterval, entered: TimeInterval, reported: Bool, known: Bool,
+        magnifies: Bool
+    ) -> GrowStart {
+        guard magnifies else {
+            guard frameTime + frameDuration >= entered + DockMotion.expand.delay else { return .wait }
+            return reported || known ? .start : .giveUp
+        }
+        let rides = entered + DockMotion.growCaptions.delay
+        guard frameTime + 2 * frameDuration >= rides else { return .wait }
+        if reported { return .start }
+        guard frameTime + frameDuration >= rides else { return .wait }
+        if known { return .start }
+        return frameTime + frameDuration < entered + DockMotion.expand.delay ? .wait : .giveUp
     }
 
     /// A replayed growth is over once it has run and the Dock reports the thumbnails, or once the
@@ -500,9 +678,6 @@ final class MissionControlLabels {
         pointer = nil
         shownLayouts = []
         sawBar = false
-        if MissionControlMotionRecorder.isEnabled {
-            MissionControlMotionRecorder.shared.refreshOwnWindows()
-        }
         clock.stop()
         reader.end()
         overlay.hide()
@@ -510,6 +685,8 @@ final class MissionControlLabels {
         retraction = 1
         swipe.settle()
         logOutcome("Spaces Bar not found")
+        // A space chosen in Mission Control may show another wallpaper.
+        if closedBackgroundsReadAt == nil { readBackgroundsSoon() }
     }
 
     /// Where the labels go on a frame.
@@ -528,25 +705,36 @@ final class MissionControlLabels {
     /// Dock reader last learned, and asks it for more, so it never waits on the Dock.
     private func tick() {
         guard isTracking else { return }
-        // A frame that doesn't find the bars fully in and still counts as motion for the capture.
+        // A frame that doesn't find the bars fully in and still counts as motion for the capture. One that finds them
+        // within `restSlack` of fully in, with nothing moving them, counts as still for a strip's.
         var resting = false
+        var still = false
         let now = ProcessInfo.processInfo.systemUptime
         defer {
             if !resting { noteMotion() }
+            if !still {
+                barMotionCount &+= 1
+                stillSince = nil
+            }
             captionLooks.noteBars(resting: resting, at: now)
         }
         // Replayed slides are worked out for when this frame reaches the screen.
         let frameTime = max(clock.targetTime ?? now, now)
         if let running = shift, running.slide.isFinished(at: frameTime) { shift = nil }
         recordPointer()
+        recordBars()
         followPointer(at: now)
+        pointerPace.note(pointer?.point, at: now)
         // Re-measure only while nothing moves, so a measurement never holds up a slide.
-        reader.request(remeasure: retraction <= 0 && swipe.state == .idle && slide == nil)
+        reader.request(
+            remeasure: retraction <= 0 && swipe.state == .idle && slide == nil, magnification: magnification)
         // A reading usually takes about a millisecond: wait briefly for this frame's, so the labels
         // stay in step with the Dock, but draw with the last one rather than wait on a busy Dock.
         // A replayed slide doesn't need it, so it never waits.
         let reading = reader.latest(waitingUpTo: slide == nil ? Self.readingWait : 0)
         take(reading)
+        if let shot = shotStrip { finishStripCapture(shot, reading: reading) }
+        learnMagnification(from: reading, at: now)
         watchCaptions(frameTime: frameTime)
         if let pending = pendingGrow { startGrowIfDue(pending, reading: reading, frameTime: frameTime) }
         if let running = grow, growIsOver(running, reading: reading, frameTime: frameTime) { grow = nil }
@@ -575,7 +763,10 @@ final class MissionControlLabels {
         let dock: CGFloat? = reading.barFrame.flatMap { barFrame in
             layouts.first.map { Self.retraction(bar: barFrame, screen: $0.screen) }
         }
-        if dock != nil { sawBar = true }
+        if dock != nil, !sawBar {
+            sawBar = true
+            noteWindowsOverBars(at: "bar in")
+        }
         if swipe.gesture != confirmedGesture, swipe.state != .idle, dockTookSwipe(dock: dock) {
             confirmedGesture = swipe.gesture
         }
@@ -598,10 +789,15 @@ final class MissionControlLabels {
                 keptToThisDesktop = true
                 overlay.showOnEveryDesktop(false)
             }
-            if current <= 0, swipe.state == .idle, slide == nil, shift == nil, grow == nil, pendingGrow == nil,
-               reflow == nil, drag == nil, swipe.pressedAt == nil, !layouts.isEmpty {
-                resting = true
-                captureIfSettled(layouts, now: now)
+            if current <= Self.restSlack, swipe.state == .idle, slide == nil, shift == nil, grow == nil,
+               pendingGrow == nil, reflow == nil, drag == nil, swipe.pressedAt == nil, !layouts.isEmpty {
+                still = true
+                if stillSince == nil { stillSince = now }
+                if current <= 0 {
+                    resting = true
+                    captureIfSettled(layouts, now: now)
+                }
+                captureStripsIfDue(layouts, now: now)
             }
         }
     }
@@ -630,10 +826,13 @@ final class MissionControlLabels {
                 restingLayouts = reading.layouts.map { $0.atRest() }
                 settleDrop(reading.layouts, answered: reading.answered)
                 logOutcome("Spaces Bar found, \(reading.layouts.reduce(0) { $0 + $1.captions.count }) labels shown")
-                for layout in reading.layouts where layout.frame.height > Self.expandedBarHeight {
-                    let centred = layout.atRest().centred()
-                    expandedLayouts[layout.displayID] = centred
-                    expandedLayoutsByCount["\(layout.displayID)|\(layout.buttons.count)"] = centred
+                for layout in reading.layouts {
+                    if layout.frame.height > Self.expandedBarHeight {
+                        let centred = layout.atRest().centred()
+                        expandedLayoutsByCount["\(layout.displayID)|\(layout.buttons.count)"] = centred
+                    } else {
+                        namesRows[layout.displayID] = layout.atRest()
+                    }
                 }
                 if let running = grow, let reported = reading.layouts.first(where: {
                     $0.screen == running.screen && $0.frame.height > Self.expandedBarHeight
@@ -649,6 +848,8 @@ final class MissionControlLabels {
                         noticeShift(from: shownLayouts, to: reading.layouts, at: changedAt)
                     }
                 }
+                noteThumbnailsResizing(from: shownLayouts, to: reading.layouts)
+                noteBarsMoving(from: shownLayouts, to: reading.layouts)
                 shownLayouts = reading.layouts
             }
         }
@@ -656,14 +857,63 @@ final class MissionControlLabels {
         previousReadingTime = latestReadingTime
         latestReadingTime = reading.answered
         record((reading.barFrame.map { String(format: "dock bar y %.1f h %.0f", $0.minY, $0.height) } ?? "dock no bar")
-               + String(format: ", asked %.4f, requested %.4f", reading.time, reading.requested), at: reading.answered)
+               + String(format: ", asked %.4f, requested %.4f", reading.time, reading.requested)
+               + reading.layouts.filter(magnification.follows).map { ", " + Self.thumbnailFrames(of: $0) }.joined(),
+               at: reading.answered)
+    }
+
+    /// Thumbnails still resizing under the pointer, as followed: a capture waits for them to settle, or the
+    /// plate it takes lands off the caption, and a strip's capture, or the line it measures does.
+    private func noteThumbnailsResizing(from old: [BarLayout], to new: [BarLayout]) {
+        let resizing = new.contains { bar in
+            magnification.follows(bar)
+                && old.first { $0.screen == bar.screen }.map { bar.thumbnailsMoved(since: $0) } == true
+        }
+        guard resizing else { return }
+        noteMotion()
+        thumbnailsResizedAt = ProcessInfo.processInfo.systemUptime
+    }
+
+    /// Bars reported away from where they were last, as when the Dock moves one a little within `restSlack` of fully
+    /// in: a strip's capture under way may have caught them moving, and the next waits for them to be still again.
+    private func noteBarsMoving(from old: [BarLayout], to new: [BarLayout]) {
+        let moving = new.contains { bar in
+            old.first { $0.screen == bar.screen }.map { !$0.isWhereMeasured(now: bar.frame) } == true
+        }
+        guard moving else { return }
+        barMotionCount &+= 1
+        stillSince = nil
+    }
+
+    /// Learns, each frame, which expanded bars magnify from the Dock's latest report of them, while nothing
+    /// but the pointer moves their thumbnails: no grow, slide, zoom, drag, desktop coming or going, swipe,
+    /// press, as for a window dragged onto the bar, or bar off its place.
+    private func learnMagnification(from reading: DockReader.Reading, at time: TimeInterval) {
+        guard grow == nil, pendingGrow == nil, slide == nil, zoom == nil, drag == nil, reflow == nil,
+              pendingChange == nil, swipe.state == .idle, swipe.pressedAt == nil, retraction <= 0
+        else {
+            magnification.interrupt()
+            return
+        }
+        for layout in reading.layouts {
+            guard let learned = magnification.learn(
+                from: layout, read: reading.time, pointer: pointer?.point, at: time)
+            else { continue }
+            let found = "Spaces Bar on display \(layout.displayID) with \(layout.buttons.count) thumbnails "
+                + (learned == .magnifies ? "magnifies" : "doesn't magnify")
+            let labelling = learned == .magnifies ? "only the hovered one" : "every thumbnail"
+            Self.log.log("\(found, privacy: .public): labelling \(labelling, privacy: .public)")
+            record(found, at: time)
+            BarMagnificationStore.save(magnification.kept)
+        }
     }
 
     /// The Dock reports the hover-expanded thumbnails at their new places as they start sliding
     /// sideways: slide the labels there on its timing, from where they are now.
     private func noticeShift(from old: [BarLayout], to new: [BarLayout], at time: TimeInterval) {
         guard let before = old.first, let after = new.first,
-              let dx = Self.uniformShift(from: before, to: after), abs(dx) > 0.5
+              let dx = Self.sidewaysShift(from: before, to: after, byThumbnails: magnification.follows(after)),
+              abs(dx) > 0.5
         else {
             if let before = old.first, let after = new.first, before.frame != after.frame { shift = nil }
             return
@@ -683,7 +933,11 @@ final class MissionControlLabels {
         return together ? dx : nil
     }
 
-    private static func uniformShift(from old: BarLayout, to new: BarLayout) -> CGFloat? {
+    /// How far a bar's thumbnails slid sideways together between two measurements of it, or nil. Judged on
+    /// the thumbnails themselves `byThumbnails`, for a bar whose thumbnails resize under the pointer: there a
+    /// lone caption moving tells nothing. Otherwise on the captions.
+    static func sidewaysShift(from old: BarLayout, to new: BarLayout, byThumbnails: Bool) -> CGFloat? {
+        if byThumbnails { return new.thumbnailShift(since: old) }
         guard old.frame == new.frame else { return nil }
         return uniformShift(from: old.captions.map(\.centre), to: new.captions.map(\.centre))
     }
@@ -794,7 +1048,7 @@ final class MissionControlLabels {
         }
         if !timed.isFinished(at: frameTime) {
             // A close turned back: the Dock reports the bar coming back in.
-            if closing, timed.timing != DockMotion.choose, let dock, dock <= Self.restSlack,
+            if closing, !Self.clickTimings.contains(timed.timing), let dock, dock <= Self.restSlack,
                reading.time > timed.reference {
                 let reverse = TimedSlide(timing: DockMotion.reverse, reference: readingChangedAt,
                                          from: timed.retraction(at: readingChangedAt), to: 0)
@@ -818,6 +1072,9 @@ final class MissionControlLabels {
         return .gone
     }
 
+    /// Closes timed from a click, which the Dock may still report at rest just after: never turned back.
+    static let clickTimings = [DockMotion.choose, DockMotion.clickClose]
+
     /// Starts replaying the close the Dock has just begun, timed from `reference`.
     private func startClose(reference: TimeInterval, frameTime: TimeInterval) -> Placement {
         let expanded = (restingLayouts.first?.frame.height ?? 0) > Self.expandedBarHeight
@@ -825,6 +1082,7 @@ final class MissionControlLabels {
                                reference: reference, from: retraction, to: 1)
         slide = close
         record(expanded ? "close expanded" : "close", at: reference)
+        noteWindowsOverBars(at: "closing")
         return .slide(close)
     }
 
@@ -861,6 +1119,11 @@ final class MissionControlLabels {
         if direction > 0 { return max(dockRetraction, released) }
         if direction < 0 { return min(dockRetraction, released) }
         return dockRetraction
+    }
+
+    /// The running app's process, cached as `appElement` caches its element.
+    func pid(of bundleID: String) -> pid_t? {
+        appElement(bundleID).flatMap { _ in apps[bundleID]?.pid }
     }
 
     private func appElement(_ bundleID: String) -> AXUIElement? {

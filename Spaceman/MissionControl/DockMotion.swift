@@ -55,6 +55,11 @@ enum DockMotion {
     /// Closing the bar of thumbnails, timed the same way. Not yet fitted on this Mac: it takes the
     /// close's correction to the delay.
     static let closeExpanded = Timing(delay: 0.060, duration: 0.236, curve: CubicBezier(0.436, 0.241, 0.514, 1.046))
+    /// Closing the bar of thumbnails by a click off the bars, on a window or the desktop, timed from the click (its
+    /// release, as Spaceman sees it). The Dock answers nothing for 100ms or so after such a click, so the close can't
+    /// wait for its report, as the keyboard's does. Fitted on macOS 26.7 to two such closes with 15 desktops, filmed:
+    /// to within 5pt of the captions' rise, 3pt on average; macOS's captions stay opaque as they go.
+    static let clickClose = Timing(delay: 0.064, duration: 0.236, curve: CubicBezier(0.814, 0.835, 0.185, 0.884))
     /// Mission Control asked back while closing: the Dock turns the bar around from where it is.
     static let reverse = Timing(delay: 0.010, duration: 0.245, curve: CubicBezier(0.42, 0, 0.58, 1))
     /// The thumbnails of a hover-expanded bar sliding back to the middle once the pointer leaves them,
@@ -65,6 +70,10 @@ enum DockMotion {
     /// 26.7 to three expansions, filmed: to within 2% of the travel, each starting 86-98ms after the
     /// pointer entered. Once, with the Dock still making its thumbnails, it started about 0.5s after.
     static let expand = Timing(delay: 0.092, duration: 0.200, curve: CubicBezier(0.1, 0.4, 0.6, 1.05))
+    /// The captions riding that grow on a magnifying bar, from the names down to under the thumbnails, timed the
+    /// same way: they start sooner and land sooner than the thumbnails finish, along and down alike. Fitted on macOS
+    /// 26.7 to three expansions with 16 desktops, filmed: to within 4.5pt of the 112pt ride down, 2pt on average.
+    static let growCaptions = Timing(delay: 0.044, duration: 0.197, curve: CubicBezier(0.778, 0.857, 0.59, 0.898))
     /// A desktop added in Mission Control: the thumbnails narrow and glide to make room, timed from the
     /// window server's "Mission Control began", which it sends for this too. Fitted on macOS 26.7 to
     /// two additions, filmed: to within 1% of the travel, both starting 23ms after the event.

@@ -7,12 +7,14 @@
 
 import AppKit
 
-/// The looks captured for the captions, kept across sessions while the screens show what they were
-/// captured over, and the captions this session's captures could find no look for.
+/// The looks captured for the captions, kept across sessions, and on disk across launches, while the screens show
+/// what they were captured over, and the captions this session's captures could find no look for.
 struct CaptionLooks {
 
-    /// A look for a caption: captured for it exactly, or borrowed from the bar at this height or another.
-    typealias Found = (look: NativeCaptionLook, exact: Bool, sameHeight: Bool)
+    /// A look for a caption with the bar at its height: captured for it exactly, or borrowed from its name.
+    /// A look from the bar at another height is never borrowed: it would draw a names-row caption's
+    /// larger text and darker plate over a thumbnail's, or the other way round.
+    typealias Found = (look: NativeCaptionLook, exact: Bool)
 
     /// Where a caption's look is kept. It belongs to its screen, the text it covers and the name over
     /// it, and to the bar's height: hover-expanded thumbnails put the captions over a different part of
@@ -20,8 +22,6 @@ struct CaptionLooks {
     struct Keys {
         let screen: String
         let exact: String
-        /// Whatever the bar's height, for a bar that has changed shape since.
-        let anyHeight: String
         /// By name alone, whatever caption it covers, for a caption that has moved to another thumbnail.
         let name: String
     }
@@ -35,21 +35,36 @@ struct CaptionLooks {
     }
 
     /// What a capture brought back: looks by `Keys.exact`, the screens it failed to capture, and each
-    /// captured screen's background, by `Keys.screen`.
+    /// captured screen's background and when its shot came back (system uptime), by `Keys.screen`.
     struct Result {
         var found: [String: NativeCaptionLook] = [:]
         var failed: Set<String> = []
         var backgrounds: [String: String] = [:]
+        var taken: [String: TimeInterval] = [:]
     }
 
     enum Outcome: Equatable {
         /// From an earlier session: nothing taken.
         case stale
-        /// The bars moved while it ran: nothing taken, and the bars are captured again once at rest.
+        /// The bars moved before any of its screens was shot: nothing taken, and the bars are captured again once
+        /// at rest.
         case moved
         case kept
-        /// Kept in part: a screen failed, or a look moved a caption and waits for another capture to agree.
+        /// Kept in part: a screen failed or was shot after the bars moved, or a look moved a caption and waits for
+        /// another capture to agree.
         case retry
+    }
+
+    /// A screen's looks as kept on disk: what it showed behind them, and each look by its keys less the screen's.
+    struct ScreenLooks {
+        struct Entry {
+            let exact: String
+            let name: String
+            let look: NativeCaptionLook
+        }
+
+        let background: String
+        let entries: [Entry]
     }
 
     static let attemptLimit = 4
@@ -59,16 +74,18 @@ struct CaptionLooks {
     static let lookWait: TimeInterval = 1.5
 
     private var exact: [String: NativeCaptionLook] = [:]
-    private var anyHeight: [String: NativeCaptionLook] = [:]
     private var byName: [String: NativeCaptionLook] = [:]
+    /// Each look in `exact`'s `Keys.name`, by its `Keys.exact`.
+    private var nameKeys: [String: String] = [:]
     /// Captures that placed a caption away from its look in use, each waiting for another to agree.
     private var waiting: [String: NativeCaptionLook] = [:]
-    /// This session's captions no look can arrive for, by `Keys.anyHeight`.
+    /// This session's captions no look can arrive for, by `Keys.exact`: a capture with the bar at one height
+    /// says nothing of its captions at another.
     private var spent: Set<String> = []
     /// How long the bars have rested this session, and since when they have been resting, if they are.
     private var restTime: TimeInterval = 0
     private var restingAt: TimeInterval?
-    /// `restTime` when this session first drew each caption without a look, by `Keys.anyHeight`.
+    /// `restTime` when this session first drew each caption without a look, by `Keys.exact`.
     private var lookless: [String: TimeInterval] = [:]
     /// What each screen showed behind its captions when its looks were captured, by `Keys.screen`.
     private(set) var backgrounds: [String: String] = [:]
@@ -81,25 +98,41 @@ struct CaptionLooks {
     static func keys(bar: BarLayout, caption: Caption) -> Keys {
         let screen = screenKey(bar.screen)
         let height = Int(bar.frame.height.rounded())
-        let anyHeight = "\(screen)|\(caption.covers)|\(caption.name)"
         return Keys(
-            screen: screen, exact: "\(anyHeight)|\(height)", anyHeight: anyHeight,
+            screen: screen, exact: "\(screen)|\(caption.covers)|\(caption.name)|\(height)",
             name: "\(screen)|\(caption.name)|\(height)")
     }
 
     func look(for caption: Caption, on bar: BarLayout) -> Found? {
         let keys = Self.keys(bar: bar, caption: caption)
-        if let look = exact[keys.exact] { return (look, true, true) }
-        if let look = anyHeight[keys.anyHeight] { return (look, false, false) }
+        if let look = exact[keys.exact] { return (look, true) }
         // Moved to another thumbnail, as when a desktop comes, goes or is dragged: until a capture
         // of it there, the look it had elsewhere.
-        return byName[keys.name].map { ($0, false, true) }
+        return byName[keys.name].map { ($0, false) }
+    }
+
+    /// A caption's text colour and the bar's colour, each nil where none was measured.
+    struct Colors {
+        var text: CGColor?
+        var bar: CGColor?
+    }
+
+    /// The colours captured on `screen` (a `Keys.screen`), each from looks with the bar `height` tall where any has
+    /// one, else from looks at any height, as the names row's.
+    func measuredColors(onScreen screen: String, height: CGFloat) -> Colors {
+        let onScreen = exact.filter { Self.screen(ofKey: $0.key) == screen }.sorted { $0.key < $1.key }
+        let atHeight = onScreen.filter { Self.height(ofKey: $0.key) == height.rounded() }.map(\.value)
+        let anyHeight = onScreen.map(\.value)
+        func first(_ color: (NativeCaptionLook) -> CGColor?) -> CGColor? {
+            atHeight.lazy.compactMap(color).first ?? anyHeight.lazy.compactMap(color).first
+        }
+        return Colors(text: first { $0.textColor }, bar: first { $0.barColor })
     }
 
     /// Whether a look may yet be captured for a caption that has none: not once a capture has found
     /// none for it or given up, nor once it has waited `lookWait` of the bars at rest.
     mutating func lookMayArrive(for caption: Caption, on bar: BarLayout) -> Bool {
-        let key = Self.keys(bar: bar, caption: caption).anyHeight
+        let key = Self.keys(bar: bar, caption: caption).exact
         guard !spent.contains(key) else { return false }
         let since = lookless[key] ?? restTime
         lookless[key] = since
@@ -129,27 +162,40 @@ struct CaptionLooks {
         })
     }
 
-    /// Takes in what `capture` found, unless it belongs to an earlier session or the bars moved while
-    /// it ran. A caption it found no look for is spent; one on a screen it failed to capture is asked
-    /// about again, unless this was the last attempt.
-    mutating func finish(_ capture: Capture, _ result: Result, moved: Bool) -> Outcome {
+    /// The screens of `result` shot after the bars began to move at `movedAt`, if they did while it ran: their
+    /// shots may have caught the bars moving. A screen shot before then caught them at rest, as a bar of names
+    /// is shot moments before the pointer enters it and the Dock grows it.
+    static func screensShotMoving(_ result: Result, movedAt: TimeInterval?) -> Set<String> {
+        guard let movedAt else { return [] }
+        return Set(result.taken.filter { $0.value > movedAt }.keys)
+    }
+
+    /// Takes in what `capture` found, but for the screens `moved`, shot after the bars began to move, unless it
+    /// belongs to an earlier session. A caption it found no look for is spent; one on a screen it failed to capture,
+    /// or shot moving, is asked about again, unless this was the last attempt.
+    mutating func finish(_ capture: Capture, _ result: Result, movedOn moved: Set<String>) -> Outcome {
         guard capture.session == session else { return .stale }
         let lastAttempt = capture.attempt >= Self.attemptLimit
-        guard !moved else {
-            if lastAttempt { spent.formUnion(capture.asked.map(\.anyHeight)) }
+        let asked = Set(capture.asked.map(\.screen))
+        guard moved.isEmpty || !asked.isSubset(of: moved) else {
+            if lastAttempt { spent.formUnion(capture.asked.map(\.exact)) }
             return .moved
         }
         var retry = false
         for keys in capture.asked {
-            if result.failed.contains(keys.screen) {
-                if lastAttempt { spent.insert(keys.anyHeight) } else { retry = true }
+            if moved.contains(keys.screen) {
+                if lastAttempt { spent.insert(keys.exact) } else { retry = true }
+            } else if result.failed.contains(keys.screen) {
+                if lastAttempt { spent.insert(keys.exact) } else { retry = true }
             } else if let captured = result.found[keys.exact] {
                 if !take(captured, for: keys) { retry = true }
             } else {
-                spent.insert(keys.anyHeight)
+                spent.insert(keys.exact)
             }
         }
-        backgrounds.merge(result.backgrounds.filter { !result.failed.contains($0.key) }) { $1 }
+        backgrounds.merge(result.backgrounds.filter { !result.failed.contains($0.key) && !moved.contains($0.key) }) {
+            $1
+        }
         return retry ? .retry : .kept
     }
 
@@ -161,9 +207,48 @@ struct CaptionLooks {
         waiting[keys.exact] = settled.waiting
         guard let use = settled.use else { return false }
         exact[keys.exact] = use
-        anyHeight[keys.anyHeight] = use
         byName[keys.name] = use
+        nameKeys[keys.exact] = keys.name
         return true
+    }
+
+    /// `screen`'s looks (a `Keys.screen`), to keep on disk: those in use, with what it showed behind them. Nil for
+    /// a screen whose background isn't known.
+    func screenLooks(_ screen: String) -> ScreenLooks? {
+        guard let background = backgrounds[screen] else { return nil }
+        let prefix = screen.count + 1
+        let entries = exact.filter { Self.screen(ofKey: $0.key) == screen }.sorted { $0.key < $1.key }
+            .compactMap { key, look in
+                nameKeys[key].map { ScreenLooks.Entry(exact: String(key.dropFirst(prefix)),
+                                                      name: String($0.dropFirst(prefix)), look: look) }
+            }
+        return ScreenLooks(background: background, entries: entries)
+    }
+
+    /// Takes looks kept on disk, by `CaptionLookStore.file`, for `screens`: only those captured over what each
+    /// screen shows now, its `current` background, by `Keys.screen`, and only for captions this run has no look
+    /// for, on screens it hasn't captured over another background. Returns how many it took.
+    mutating func adopt(
+        _ stored: [String: ScreenLooks], screens: [ScreenInfo], current: [String: String]
+    ) -> Int {
+        var taken = 0
+        for info in screens {
+            guard let uuid = info.uuid,
+                  let kept = stored[CaptionLookStore.file(display: uuid, screen: info.frame.size)]
+            else { continue }
+            let screen = Self.screenKey(info.frame)
+            guard current[screen] == kept.background, (backgrounds[screen] ?? kept.background) == kept.background
+            else { continue }
+            backgrounds[screen] = kept.background
+            for entry in kept.entries where exact["\(screen)|\(entry.exact)"] == nil {
+                let keys = Keys(screen: screen, exact: "\(screen)|\(entry.exact)", name: "\(screen)|\(entry.name)")
+                exact[keys.exact] = entry.look
+                if byName[keys.name] == nil { byName[keys.name] = entry.look }
+                nameKeys[keys.exact] = keys.name
+                taken += 1
+            }
+        }
+        return taken
     }
 
     /// Drops the looks captured over another background than the screens show now, so their native
@@ -172,8 +257,8 @@ struct CaptionLooks {
         let stale = Self.staleScreens(captured: backgrounds, current: current)
         guard !stale.isEmpty else { return 0 }
         exact = Self.dropping(exact, on: stale)
-        anyHeight = Self.dropping(anyHeight, on: stale)
         byName = Self.dropping(byName, on: stale)
+        nameKeys = Self.dropping(nameKeys, on: stale)
         waiting = Self.dropping(waiting, on: stale)
         spent = spent.filter { !stale.contains(Self.screen(ofKey: $0)) }
         for screen in stale { backgrounds[screen] = nil }
@@ -195,6 +280,11 @@ struct CaptionLooks {
 
     private static func screen(ofKey key: String) -> String {
         String(key.prefix { $0 != "|" })
+    }
+
+    /// The bar's height in a `Keys.exact`, its last part.
+    private static func height(ofKey key: String) -> CGFloat? {
+        key.split(separator: "|").last.flatMap { Double($0) }.map { CGFloat($0) }
     }
 }
 

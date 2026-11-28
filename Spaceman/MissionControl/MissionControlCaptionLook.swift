@@ -11,6 +11,9 @@
 //  labels move with the bar, so the patch each one carries stays over the part of the bar it came
 //  from as the bar slides.
 //
+//  A magnifying bar, which captions only its hovered thumbnail, is captured instead as one strip of
+//  its caption row across the screen, with that caption erased and measured: see CaptionStrip.
+//
 
 import AppKit
 import CoreText
@@ -28,6 +31,8 @@ struct NativeCaptionLook {
         /// Dock's caption positions can be a few points out while the bar settles; this is not.
         let top: CGFloat
         let image: CGImage
+        /// How far below the image's top the name's baseline is, in points.
+        let baseline: CGFloat
     }
 
     let plain: Variant?
@@ -36,6 +41,9 @@ struct NativeCaptionLook {
     let wasCurrent: Bool
     /// What was measured, for the log.
     let summary: String
+    /// The caption's text colour and the bar's colour beside the caption, as measured.
+    var textColor: CGColor?
+    var barColor: CGColor?
 
     func variant(current isCurrent: Bool) -> Variant? {
         isCurrent ? (current ?? plain) : (plain ?? current)
@@ -86,16 +94,64 @@ struct CaptionToMatch {
     let name: String
 }
 
+/// What one capture of a display's bar matched, for the debug motion recording.
+struct CaptureReport {
+    struct Entry {
+        let covers: String
+        /// The matched look's height in points; nil for a miss.
+        let lookHeight: CGFloat?
+        /// Why the caption was missed, when the matcher said.
+        let miss: String?
+    }
+
+    let displayID: CGDirectDisplayID
+    /// When the screenshot was asked for, and when it came back (system uptime).
+    let asked: TimeInterval
+    let taken: TimeInterval
+    /// The bar's height, which the captions' looks are kept by.
+    let barHeight: CGFloat
+    let entries: [Entry]
+
+    init(displayID: CGDirectDisplayID, asked: TimeInterval, taken: TimeInterval, captions: [CaptionToMatch],
+         matches: MissionControlCaptionLook.Matches) {
+        self.displayID = displayID
+        self.asked = asked
+        self.taken = taken
+        barHeight = captions.first.map { $0.barBottom - $0.barTop } ?? 0
+        entries = captions.map { caption in
+            let look = matches.looks[caption.key]
+            return Entry(covers: caption.covers,
+                         lookHeight: look.flatMap { $0.variant(current: $0.wasCurrent)?.frame.height },
+                         miss: look == nil ? matches.misses[caption.key] ?? "no reason given" : nil)
+        }
+    }
+
+    /// "capture display <id> attempt <n> <outcome>, bars <at rest|moved>, bar h <h>, shot in <ms>ms: matched
+    /// "<covers>" h <look height>, ...; missed "<covers>" (<reason>), ...", heights in points.
+    func line(attempt: Int, outcome: CaptionLooks.Outcome, moved: Bool) -> String {
+        let matched = entries.compactMap { entry in
+            entry.lookHeight.map { String(format: "\"%@\" h %.1f", entry.covers, $0) }
+        }
+        let missed = entries.compactMap { entry in entry.miss.map { "\"\(entry.covers)\" (\($0))" } }
+        return String(format: "capture display %u attempt %d %@, bars %@, bar h %.0f, shot in %.0fms: ",
+                      displayID, attempt, "\(outcome)", moved ? "moved" : "at rest", barHeight,
+                      (taken - asked) * 1000)
+            + "matched " + (matched.isEmpty ? "none" : matched.joined(separator: ", "))
+            + "; missed " + (missed.isEmpty ? "none" : missed.joined(separator: ", "))
+    }
+}
+
 enum MissionControlCaptionLook {
 
     private static let log = Logger(subsystem: Constants.AppInfo.bundleId, category: "missionControlLook")
 
     // Native caption metrics, measured on macOS 26.7: the system font at 14pt, regular weight, in
-    // a 24pt pill reaching 17pt above the baseline and 7pt below it.
+    // a 24pt pill reaching 17pt above the baseline and 7pt below it, and 11.5pt either side of the text.
     static let nativeFontSize: CGFloat = 14
-    private static let pillRadius: CGFloat = 6
-    private static let bandAbove: CGFloat = 17
-    private static let bandBelow: CGFloat = 7
+    static let pillRadius: CGFloat = 6
+    static let bandAbove: CGFloat = 17
+    static let bandBelow: CGFloat = 7
+    static let pillPadding: CGFloat = 11.5
     /// Bar either side of the wider of the native text and the name.
     private static let platePadding: CGFloat = 4
     /// How wide a strip either side of a plate gives the bar's colour on each row.
@@ -111,6 +167,14 @@ enum MissionControlCaptionLook {
     /// such as the bar's edge, and anything taller is not a caption.
     private static let minTextHeight: CGFloat = 5
     private static let maxTextHeight: CGFloat = 22
+    /// How far from its thumbnail's middle macOS may centre a caption: a strip whose caption sits further off was
+    /// captured as the thumbnails moved.
+    private static let maxLineOffset: CGFloat = 6
+    /// The sizes a native caption's text is taken to be between: its name is drawn no smaller or larger.
+    private static let minFontSize: CGFloat = 10
+    private static let maxFontSize: CGFloat = 20
+    /// How much of its own text's height at `minFontSize` a caption's text must show to be taken for it.
+    private static let plausibleShare: CGFloat = 0.8
 
     /// Saves each capture, and the labels drawn over it, to Spaceman's caches folder.
     static var isDebugging: Bool {
@@ -119,21 +183,111 @@ enum MissionControlCaptionLook {
 
     // MARK: - Capture
 
+    /// A screen's captions matched: their looks, the report for the recorder, and when the shot came back (system
+    /// uptime), if one was taken.
+    typealias Captured = (looks: [String: NativeCaptionLook], report: CaptureReport?, taken: TimeInterval?)
+
     /// Captures the band of the screen holding `captions`, leaving out Spaceman's own windows, and
     /// matches each caption. Nil when the capture fails, as it does without Screen Recording.
     static func capture(
         displayID: CGDirectDisplayID,
         screen: CGRect,
         captions: [CaptionToMatch]
-    ) async -> [String: NativeCaptionLook]? {
+    ) async -> Captured? {
+        guard let sourceRect = region(of: captions, on: screen) else { return ([:], nil, nil) }
+        let started = ProcessInfo.processInfo.systemUptime
+        guard let shot = await shoot(displayID: displayID, screen: screen, sourceRect: sourceRect) else { return nil }
+        let matched = matches(in: shot.image, origin: shot.origin, scale: shot.scale, captions: captions)
+        let found = matched.looks
+        let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+        log.log("""
+            Matched \(found.count, privacy: .public) of \(captions.count, privacy: .public) captions \
+            on display \(displayID, privacy: .public) in \(elapsed, privacy: .public)ms
+            """)
+        if isDebugging {
+            for caption in captions {
+                let summary = found[caption.key]?.summary ?? "not matched"
+                log.log("\(caption.covers, privacy: .public): \(summary, privacy: .public)")
+            }
+            saveDebugImages(shot.image, origin: shot.origin, scale: shot.scale, captions: captions, looks: found,
+                            name: "display-\(displayID)")
+        }
+        let report = MissionControlMotionRecorder.isEnabled
+            ? CaptureReport(displayID: displayID, asked: shot.asked, taken: shot.taken, captions: captions,
+                            matches: matched)
+            : nil
+        return (found, report, shot.taken)
+    }
+
+    /// What a capture of a magnifying bar's caption row brought back: its strip, or why the hovered caption in it
+    /// couldn't be erased; and what was seen of that caption, whenever it was found.
+    enum StripCapture {
+        case strip(CaptionStrip, seen: CaptionSighting? = nil)
+        case missed(String, seen: CaptionSighting? = nil)
+
+        var seen: CaptionSighting? {
+            switch self {
+            case .strip(_, let seen), .missed(_, let seen): return seen
+            }
+        }
+    }
+
+    /// A capture of a caption row, and when its shot came back (system uptime).
+    struct StripShot {
+        let captured: StripCapture
+        let taken: TimeInterval
+    }
+
+    /// Captures `screen`'s caption row at the depth of `hovered`, the one caption macOS draws on a magnifying bar,
+    /// and erases it. Nil when the capture fails, as it does without Screen Recording.
+    static func captureStrip(
+        displayID: CGDirectDisplayID,
+        screen: CGRect,
+        hovered: CaptionToMatch,
+        background: String
+    ) async -> StripShot? {
+        guard let sourceRect = region(of: [hovered], on: screen) else {
+            return StripShot(captured: .missed("caption off the screen"), taken: ProcessInfo.processInfo.systemUptime)
+        }
+        guard let shot = await shoot(displayID: displayID, screen: screen, sourceRect: sourceRect) else { return nil }
+        let captured = strip(in: shot.image, origin: shot.origin, scale: shot.scale, hovered: hovered,
+                             background: background)
+        switch captured {
+        case .strip(let strip, _):
+            log.log("Captured the caption strip of display \(displayID, privacy: .public)")
+            if isDebugging, let folder = debugFolder() {
+                write(shot.image, to: folder.appendingPathComponent("display-\(displayID)-row.png"))
+                write(strip.image, to: folder.appendingPathComponent("display-\(displayID)-strip.png"))
+            }
+        case .missed(let reason, _):
+            log.log("No caption strip of display \(displayID, privacy: .public): \(reason, privacy: .public)")
+        }
+        return StripShot(captured: captured, taken: shot.taken)
+    }
+
+    /// The band of `screen` to capture for `captions`, relative to the screen, in points; nil for none.
+    private static func region(of captions: [CaptionToMatch], on screen: CGRect) -> CGRect? {
         guard let top = captions.map({ min($0.centre.y - searchHalfHeight, $0.barBottom - searchAboveBottom) }).min(),
               let bottom = captions.map({ max($0.centre.y + searchHalfHeight, $0.barBottom) }).max()
-        else { return [:] }
+        else { return nil }
         let minY = max(0, (top - screen.minY - searchHalfHeight).rounded(.down))
         let maxY = min(screen.height, (bottom - screen.minY + searchHalfHeight).rounded(.up))
-        guard maxY > minY else { return [:] }
-        let sourceRect = CGRect(x: 0, y: minY, width: screen.width, height: maxY - minY)
-        let started = ProcessInfo.processInfo.systemUptime
+        guard maxY > minY else { return nil }
+        return CGRect(x: 0, y: minY, width: screen.width, height: maxY - minY)
+    }
+
+    /// A screenshot of `sourceRect` of `screen`, its top-left pixel at `origin` (AX coordinates) with `scale` pixels
+    /// to the point, and when it was asked for and came back (system uptime).
+    private struct Shot {
+        let image: CGImage
+        let origin: CGPoint
+        let scale: CGFloat
+        let asked: TimeInterval
+        let taken: TimeInterval
+    }
+
+    /// Captures `sourceRect` of `screen`, leaving out Spaceman's own windows. Nil when the capture fails.
+    private static func shoot(displayID: CGDirectDisplayID, screen: CGRect, sourceRect: CGRect) async -> Shot? {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
@@ -149,24 +303,11 @@ enum MissionControlCaptionLook {
             config.width = Int((sourceRect.width * scale).rounded())
             config.height = Int((sourceRect.height * scale).rounded())
             config.showsCursor = false
+            let asked = ProcessInfo.processInfo.systemUptime
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            let origin = CGPoint(x: screen.minX, y: screen.minY + minY)
-            let pixelScale = CGFloat(image.width) / sourceRect.width
-            let found = looks(in: image, origin: origin, scale: pixelScale, captions: captions)
-            let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
-            log.log("""
-                Matched \(found.count, privacy: .public) of \(captions.count, privacy: .public) captions \
-                on display \(displayID, privacy: .public) in \(elapsed, privacy: .public)ms
-                """)
-            if isDebugging {
-                for caption in captions {
-                    let summary = found[caption.key]?.summary ?? "not matched"
-                    log.log("\(caption.covers, privacy: .public): \(summary, privacy: .public)")
-                }
-                saveDebugImages(image, origin: origin, scale: pixelScale, captions: captions, looks: found,
-                                name: "display-\(displayID)")
-            }
-            return found
+            let taken = ProcessInfo.processInfo.systemUptime
+            return Shot(image: image, origin: CGPoint(x: screen.minX, y: screen.minY + sourceRect.minY),
+                        scale: CGFloat(image.width) / sourceRect.width, asked: asked, taken: taken)
         } catch {
             log.log("Capture failed: \(error.localizedDescription, privacy: .public)")
             return nil
@@ -193,6 +334,12 @@ enum MissionControlCaptionLook {
         var inkWidth: Int { inkRight - inkLeft + 1 }
     }
 
+    /// A caption measured in the capture, or why it couldn't be.
+    private enum Measurement {
+        case found(Measured)
+        case missed(String)
+    }
+
     private struct Pill {
         let left: Int, right: Int, top: Int, bottom: Int
         let color: SIMD3<Double>
@@ -204,16 +351,32 @@ enum MissionControlCaptionLook {
         let color: SIMD3<Double>
     }
 
+    /// What matching a capture's captions found: looks, and why each caption with none was missed, by key.
+    struct Matches {
+        var looks: [String: NativeCaptionLook] = [:]
+        var misses: [String: String] = [:]
+    }
+
     /// Matches each caption in `image`, whose top-left pixel sits at `origin` (AX coordinates)
-    /// with `scale` pixels to the point.
-    static func looks(
+    /// with `scale` pixels to the point, with why each caption it found no look for missed.
+    static func matches(
         in image: CGImage,
         origin: CGPoint,
         scale: CGFloat,
         captions: [CaptionToMatch]
-    ) -> [String: NativeCaptionLook] {
-        guard let pixels = Pixels(image) else { return [:] }
-        let measured = captions.compactMap { measure($0, in: pixels, origin: origin, scale: scale) }
+    ) -> Matches {
+        var result = Matches()
+        guard let pixels = Pixels(image) else {
+            for caption in captions { result.misses[caption.key] = "capture unreadable" }
+            return result
+        }
+        var measured: [Measured] = []
+        for caption in captions {
+            switch measure(caption, in: pixels, origin: origin, scale: scale) {
+            case .found(let found): measured.append(found)
+            case .missed(let reason): result.misses[caption.key] = reason
+            }
+        }
         // Each bar has one current space, whose pill the other captions take if it becomes theirs.
         let style = measured.lazy.compactMap { found in
             found.pill.map {
@@ -221,13 +384,15 @@ enum MissionControlCaptionLook {
                           below: $0.bottom - found.baseline, color: $0.color)
             }
         }.first
-        var found: [String: NativeCaptionLook] = [:]
         for caption in measured {
             let plain = plainVariant(caption, style: style, pixels: pixels, origin: origin, scale: scale)
             let current = (caption.pill != nil || style != nil)
                 ? pillVariant(caption, style: style, pixels: pixels, origin: origin, scale: scale)
                 : nil
-            guard plain != nil || current != nil else { continue }
+            guard plain != nil || current != nil else {
+                result.misses[caption.caption.key] = "no plate could be drawn"
+                continue
+            }
             let summary = [
                 caption.pill.map { "pill \(describe($0.color)) \($0.right - $0.left)x\($0.bottom - $0.top)px" }
                     ?? "plain",
@@ -237,10 +402,140 @@ enum MissionControlCaptionLook {
                 "plain \(plain.map { "\($0.frame.size)" } ?? "none")",
                 "in pill \(current.map { "\($0.frame.size)" } ?? "none")",
             ].joined(separator: ", ")
-            found[caption.caption.key] = NativeCaptionLook(
-                plain: plain, current: current, wasCurrent: caption.pill != nil, summary: summary)
+            result.looks[caption.caption.key] = NativeCaptionLook(
+                plain: plain, current: current, wasCurrent: caption.pill != nil, summary: summary,
+                textColor: cgColor(caption.textColor, in: pixels.colorSpace),
+                barColor: barColor(beside: caption, pixels: pixels, scale: scale)
+                    .flatMap { cgColor($0, in: pixels.colorSpace) })
         }
-        return found
+        return result
+    }
+
+    /// The caption row of a magnifying bar in `image`, whose top-left pixel sits at `origin` (AX coordinates) with
+    /// `scale` pixels to the point, as a strip across the capture with `hovered`, its one caption, erased and measured.
+    /// The capture must span the screen's width.
+    static func strip(
+        in image: CGImage,
+        origin: CGPoint,
+        scale: CGFloat,
+        hovered: CaptionToMatch,
+        background: String
+    ) -> StripCapture {
+        guard let pixels = Pixels(image) else { return .missed("capture unreadable") }
+        let found: Measured
+        switch measure(hovered, in: pixels, origin: origin, scale: scale) {
+        case .found(let measured): found = measured
+        case .missed(let reason): return .missed(reason)
+        }
+        func px(_ points: CGFloat) -> Int { Int((points * scale).rounded()) }
+        let pill = found.pill
+        let top = max(found.baseline - max(px(bandAbove), pill.map { found.baseline - $0.top } ?? 0) - px(1), 0)
+        let bottom = min(found.baseline + max(px(bandBelow), pill.map { $0.bottom - found.baseline } ?? 0) + px(1),
+                         pixels.height)
+        let edges = eraseEdges(found, scale: scale)
+        let lineOffset = lineOffset(of: found, origin: origin, scale: scale)
+        guard let textColor = cgColor(found.textColor, in: pixels.colorSpace) else { return .missed("no colour") }
+        let bar = barColor(beside: found, pixels: pixels, scale: scale)
+        let seen = CaptionSighting(
+            barColor: bar.flatMap { cgColor($0, in: pixels.colorSpace) }, textColor: textColor,
+            baseline: origin.y + CGFloat(found.baseline) / scale - hovered.barTop,
+            lineOffset: abs(lineOffset) <= maxLineOffset ? lineOffset : nil)
+        guard bottom > top else { return .missed("no strip could be drawn", seen: seen) }
+        // A neighbour's caption still fading out, or the part of this one the search window cut off.
+        guard !textBeside(edges, rows: top..<bottom, found: found, pixels: pixels, scale: scale)
+        else { return .missed("text left beside the caption", seen: seen) }
+        guard seen.lineOffset != nil else {
+            return .missed(String(format: "caption %.1fpt off its thumbnail's middle", lineOffset), seen: seen)
+        }
+        let rowRect = CGRect(x: 0, y: top, width: pixels.width, height: bottom - top)
+        guard let row = image.cropping(to: rowRect),
+              let context = context(pixels.width, bottom - top, pixels.colorSpace),
+              let data = context.data?.assumingMemoryBound(to: UInt8.self)
+        else { return .missed("no strip could be drawn", seen: seen) }
+        context.draw(row, in: CGRect(x: 0, y: 0, width: pixels.width, height: bottom - top))
+        let columns = max(edges.left, 0)..<min(max(edges.right, edges.left), pixels.width)
+        let canvas = Canvas(data: data, width: pixels.width, left: 0, top: top, columns: columns, rows: top..<bottom)
+        guard paintBar(canvas, edges: edges, found: found, pixels: pixels, scale: scale),
+              let strip = context.makeImage()
+        else { return .missed("no bar beside the caption", seen: seen) }
+        let captured = CaptionStrip(
+            image: strip, scale: scale, top: origin.y + CGFloat(top) / scale - hovered.barTop,
+            baseline: CGFloat(found.baseline - top) / scale, lineOffset: lineOffset,
+            text: CaptionStrip.TextStyle(fontSize: found.fontSize, color: textColor), background: background)
+        return .strip(captured, seen: seen)
+    }
+
+    /// The columns a caption's plate covers, in pixels of its capture, with the right edge exclusive: its pill and a
+    /// little more, or its text and `platePadding` either side.
+    private static func eraseEdges(_ found: Measured, scale: CGFloat) -> (left: Int, right: Int) {
+        let padding = Int((platePadding * scale).rounded())
+        return (left: found.pill.map { $0.left - 2 } ?? found.inkLeft - padding,
+                right: found.pill.map { $0.right + 2 } ?? found.inkRight + 1 + padding)
+    }
+
+    /// The bar's colour either side of `found`'s plate, halfway up its text.
+    private static func barColor(beside found: Measured, pixels: Pixels, scale: CGFloat) -> SIMD3<Double>? {
+        let edges = eraseEdges(found, scale: scale)
+        let band = max(Int((edgeBand * scale).rounded()), 1)
+        let row = min(max(found.baseline - Int((5 * scale).rounded()), 0), pixels.height - 1)
+        let colors = [(edges.left - band)..<edges.left, edges.right..<(edges.right + band)].compactMap {
+            edgeColor(pixels, columns: $0, row: row, isText: found.isText)
+        }
+        return colors.isEmpty ? nil : mean(colors)
+    }
+
+    /// Whether `rows` of the capture hold text outside the plate between `edges`, as far either side as `found`'s
+    /// `maxWidth`, two thumbnails' widths on a magnifying bar, where a neighbour's caption can be: looked for in
+    /// windows as wide as `found`'s text, so that text is told from the bar's broad shading as in `measure`. Further
+    /// off, a steady feature of the row would reject every strip.
+    private static func textBeside(
+        _ edges: (left: Int, right: Int), rows: Range<Int>, found: Measured, pixels: Pixels, scale: CGFloat
+    ) -> Bool {
+        let window = max(found.inkWidth, 8), gap = Int((clusterGap * scale).rounded())
+        let reach = Int((found.caption.maxWidth * scale).rounded())
+        let shortest = shortestText(covering: found.caption.covers) * scale
+        let tallest = maxTextHeight * scale
+        func clamped(_ x: Int) -> Int { min(max(x, 0), pixels.width) }
+        let sides = [clamped(edges.left - reach)..<clamped(edges.left),
+                     clamped(edges.right)..<clamped(edges.right + reach)]
+        return sides.contains { side in
+            stride(from: side.lowerBound, to: side.upperBound, by: window / 2).contains { start in
+                let columns = start..<min(start + window, side.upperBound)
+                return textClusters(rows: rows, columns: columns, isText: found.isText, gap: gap).contains {
+                    let height = CGFloat($0.count)
+                    return height >= shortest && height < tallest
+                }
+            }
+        }
+    }
+
+    /// How far right of its thumbnail's middle macOS centred `found`'s line of text, in points: where its ink sits,
+    /// less how far its ink's middle lies from the middle of its advance, which differs from caption to caption.
+    private static func lineOffset(of found: Measured, origin: CGPoint, scale: CGFloat) -> CGFloat {
+        origin.x + CGFloat(found.inkCentre) / scale - found.caption.centre.x
+            - inkOffset(of: found.caption.covers, size: found.fontSize)
+    }
+
+    /// The rows of `rows` holding text in `columns`, grouped into lines across gaps of up to `gap` rows, lowest first.
+    private static func textClusters(
+        rows: Range<Int>, columns: Range<Int>, isText: (Int, Int) -> Bool, gap: Int
+    ) -> [ClosedRange<Int>] {
+        var clusters: [ClosedRange<Int>] = []
+        for y in rows.reversed() where columns.contains(where: { isText($0, y) }) {
+            if let last = clusters.last, last.lowerBound - y <= gap {
+                clusters[clusters.count - 1] = y...last.upperBound
+            } else {
+                clusters.append(y...y)
+            }
+        }
+        return clusters
+    }
+
+    /// The least height, in points, of text taken for a caption reading `covers`: its own text's at the smallest size
+    /// a caption is taken to be. The slack allows for antialiased rows lost at half contrast, and descenders a
+    /// truncated caption drops.
+    private static func shortestText(covering covers: String) -> CGFloat {
+        max(minTextHeight, plausibleShare * inkBounds(of: covers, size: minFontSize).height)
     }
 
     // swiftlint:disable:next function_body_length cyclomatic_complexity
@@ -249,7 +544,7 @@ enum MissionControlCaptionLook {
         in pixels: Pixels,
         origin: CGPoint,
         scale: CGFloat
-    ) -> Measured? {
+    ) -> Measurement {
         func px(_ points: CGFloat) -> Int { Int((points * scale).rounded()) }
         let centreX = px(caption.centre.x - origin.x)
         let centreY = px(caption.centre.y - origin.y)
@@ -259,7 +554,7 @@ enum MissionControlCaptionLook {
         let barBottom = px(caption.barBottom - origin.y)
         let upper = max(0, min(centreY - px(searchHalfHeight), barBottom - px(searchAboveBottom)))
         let lower = min(pixels.height, max(centreY + px(searchHalfHeight), barBottom))
-        guard right - left > 8, lower - upper > 8 else { return nil }
+        guard right - left > 8, lower - upper > 8 else { return .missed("search window off the capture") }
         let columns = left..<right, rows = upper..<lower
 
         // The text is the pixels furthest from the caption's background, lighter or darker.
@@ -268,10 +563,10 @@ enum MissionControlCaptionLook {
         for y in rows { for x in columns { levels.append(pixels.luminance(x, y)) } }
         levels.sort()
         let background = levels[levels.count / 2]
-        guard let brightest = levels.last, let darkest = levels.first else { return nil }
+        guard let brightest = levels.last, let darkest = levels.first else { return .missed("no pixels") }
         let textIsLight = brightest - background >= background - darkest
         let contrast = textIsLight ? brightest - background : background - darkest
-        guard contrast > 40 else { return nil }
+        guard contrast > 40 else { return .missed(String(format: "contrast %.0f, not over 40", contrast)) }
         let threshold = textIsLight ? background + contrast / 2 : background - contrast / 2
         let isText: (Int, Int) -> Bool = { x, y in
             let level = pixels.luminance(x, y)
@@ -281,17 +576,16 @@ enum MissionControlCaptionLook {
         // The caption is the lowest line of text in the window: anything above it, such as the
         // bottom of a thumbnail, is separated from it by rows of plain bar. Lines too thin to be
         // text, such as the bar's lit bottom edge, are passed over.
-        var clusters: [ClosedRange<Int>] = []
-        for y in rows.reversed() where columns.contains(where: { isText($0, y) }) {
-            if let last = clusters.last, last.lowerBound - y <= px(clusterGap) {
-                clusters[clusters.count - 1] = y...last.upperBound
-            } else {
-                clusters.append(y...y)
-            }
+        let clusters = textClusters(rows: rows, columns: columns, isText: isText, gap: px(clusterGap))
+        // Nor is text much shorter than the caption's own text could be: a capture as the thumbnails resize can
+        // find a sliver of one where the caption should be.
+        let shortest = shortestText(covering: caption.covers)
+        guard let cluster = clusters.first(where: { CGFloat($0.upperBound - $0.lowerBound + 1) >= shortest * scale })
+        else { return .missed(String(format: "no text %.1fpt tall", shortest)) }
+        guard cluster.upperBound - cluster.lowerBound < px(maxTextHeight) else {
+            let height = CGFloat(cluster.upperBound - cluster.lowerBound + 1) / scale
+            return .missed(String(format: "lowest text %.1fpt tall, not under %.0f", height, maxTextHeight))
         }
-        guard let cluster = clusters.first(where: { $0.upperBound - $0.lowerBound + 1 >= px(minTextHeight) }),
-              cluster.upperBound - cluster.lowerBound < px(maxTextHeight)
-        else { return nil }
         let clusterTop = cluster.lowerBound, lowest = cluster.upperBound
         let textRows = Array(cluster)
         var inkLeft = Int.max, inkRight = -1
@@ -301,11 +595,11 @@ enum MissionControlCaptionLook {
             }
         }
         let inkTop = clusterTop, inkBottom = lowest
-        guard inkRight >= inkLeft else { return nil }
+        guard inkRight >= inkLeft else { return .missed("no ink") }
         // Text running into the screen's edge is a caption partly off it: its look would be wrong.
         let cutLeft = centreX - halfWidth < 0 && inkLeft <= left + 1
         let cutRight = centreX + halfWidth > pixels.width && inkRight >= right - 2
-        if cutLeft || cutRight { return nil }
+        if cutLeft || cutRight { return .missed("cut off at the screen's edge") }
         // The baseline is the bottom of the first letter, which has no descender ("Desktop").
         var baseline = inkTop
         for x in inkLeft..<min(inkRight + 1, inkLeft + px(3)) {
@@ -359,12 +653,12 @@ enum MissionControlCaptionLook {
         let nativeInkWidth = CGFloat(inkRight - inkLeft + 1) / scale
         let reference = inkBounds(of: caption.covers, size: nativeFontSize).width
         let fontSize = reference > 0
-            ? min(max((nativeFontSize * nativeInkWidth / reference * 4).rounded() / 4, 10), 20)
+            ? min(max((nativeFontSize * nativeInkWidth / reference * 4).rounded() / 4, minFontSize), maxFontSize)
             : nativeFontSize
-        return Measured(
+        return .found(Measured(
             caption: caption, inkLeft: inkLeft, inkRight: inkRight, inkTop: inkTop, inkBottom: inkBottom,
             baseline: baseline, isText: isText, textColor: textColor, fontSize: fontSize, pill: pill,
-            centreY: centreY)
+            centreY: centreY))
     }
 
     /// The caption on a plain stretch of bar: a patch of bar wide enough to hide the native text and
@@ -394,34 +688,59 @@ enum MissionControlCaptionLook {
               let data = context.data?.assumingMemoryBound(to: UInt8.self)
         else { return nil }
 
-        let band = max(px(edgeBand), 1)
-        let leftEdge = found.pill.map { $0.left - 2 } ?? boxLeft
-        let rightEdge = found.pill.map { $0.right + 2 } ?? boxRight
-        let leftX = Double(leftEdge) - Double(band) / 2, rightX = Double(rightEdge) + Double(band) / 2
-        for row in 0..<boxHeight {
-            let y = min(max(boxTop + row, 0), pixels.height - 1)
-            // Text beside the plate is left out; a row that is all text either side is a line across
-            // the bar, such as its lit edge, and is the bar's colour there.
-            let leftBand = (leftEdge - band)..<leftEdge, rightBand = rightEdge..<(rightEdge + band)
-            let leftColor = edgeColor(pixels, columns: leftBand, row: y, isText: found.isText)
-            let rightColor = edgeColor(pixels, columns: rightBand, row: y, isText: found.isText)
-            let lineColor = leftColor == nil && rightColor == nil
-                ? edgeColor(pixels, columns: leftBand, row: y) { _, _ in false } : nil
-            guard let left = leftColor ?? rightColor ?? lineColor, let right = rightColor ?? leftColor ?? lineColor
-            else { return nil }
-            for column in 0..<boxWidth {
-                let x = Double(boxLeft + column) + 0.5
-                let fraction = min(max((x - leftX) / (rightX - leftX), 0), 1)
-                let color = left * (1 - fraction) + right * fraction
-                let index = (row * boxWidth + column) * 4
-                data[index] = UInt8(min(max(color.x.rounded(), 0), 255))
-                data[index + 1] = UInt8(min(max(color.y.rounded(), 0), 255))
-                data[index + 2] = UInt8(min(max(color.z.rounded(), 0), 255))
-                data[index + 3] = 255
-            }
-        }
+        let edges = (left: found.pill.map { $0.left - 2 } ?? boxLeft,
+                     right: found.pill.map { $0.right + 2 } ?? boxRight)
+        let canvas = Canvas(data: data, width: boxWidth, left: boxLeft, top: boxTop, columns: boxLeft..<boxRight,
+                            rows: boxTop..<boxBottom)
+        guard paintBar(canvas, edges: edges, found: found, pixels: pixels, scale: scale) else { return nil }
         return finish(context, line: line, found: found, centreX: found.inkCentre, boxLeft: boxLeft, boxTop: boxTop,
                       boxBottom: boxBottom, origin: origin, scale: scale)
+    }
+
+    /// A bitmap painted from a capture: `data`, `width` pixels across, its top-left the capture's pixel at `left`,
+    /// `top`, and the capture's `columns` and `rows` to paint in it.
+    private struct Canvas {
+        let data: UnsafeMutablePointer<UInt8>
+        let width: Int
+        let left: Int
+        let top: Int
+        let columns: Range<Int>
+        let rows: Range<Int>
+    }
+
+    /// Paints `canvas` as the bar with `found`'s text erased: each row blends from the bar's colour in a band just
+    /// left of `edges.left` to its colour in a band from `edges.right`. False when a row has no bar beside it.
+    private static func paintBar(
+        _ canvas: Canvas,
+        edges: (left: Int, right: Int),
+        found: Measured,
+        pixels: Pixels,
+        scale: CGFloat
+    ) -> Bool {
+        let band = max(Int((edgeBand * scale).rounded()), 1)
+        let leftX = Double(edges.left) - Double(band) / 2, rightX = Double(edges.right) + Double(band) / 2
+        let leftBand = (edges.left - band)..<edges.left, rightBand = edges.right..<(edges.right + band)
+        for y in canvas.rows {
+            let row = min(max(y, 0), pixels.height - 1)
+            // Text beside the plate is left out; a row that is all text either side is a line across
+            // the bar, such as its lit edge, and is the bar's colour there.
+            let leftColor = edgeColor(pixels, columns: leftBand, row: row, isText: found.isText)
+            let rightColor = edgeColor(pixels, columns: rightBand, row: row, isText: found.isText)
+            let lineColor = leftColor == nil && rightColor == nil
+                ? edgeColor(pixels, columns: leftBand, row: row) { _, _ in false } : nil
+            guard let left = leftColor ?? rightColor ?? lineColor, let right = rightColor ?? leftColor ?? lineColor
+            else { return false }
+            for x in canvas.columns {
+                let fraction = min(max((Double(x) + 0.5 - leftX) / (rightX - leftX), 0), 1)
+                let color = left * (1 - fraction) + right * fraction
+                let index = ((y - canvas.top) * canvas.width + x - canvas.left) * 4
+                canvas.data[index] = UInt8(min(max(color.x.rounded(), 0), 255))
+                canvas.data[index + 1] = UInt8(min(max(color.y.rounded(), 0), 255))
+                canvas.data[index + 2] = UInt8(min(max(color.z.rounded(), 0), 255))
+                canvas.data[index + 3] = 255
+            }
+        }
+        return true
     }
 
     /// The caption as the current space's: a pill as large as the native one, or as the name needs.
@@ -504,7 +823,8 @@ enum MissionControlCaptionLook {
             width: CGFloat(image.width) / scale,
             height: CGFloat(image.height) / scale)
         return NativeCaptionLook.Variant(
-            frame: frame, top: origin.y + CGFloat(boxTop) / scale - caption.barTop, image: image)
+            frame: frame, top: origin.y + CGFloat(boxTop) / scale - caption.barTop, image: image,
+            baseline: CGFloat(found.baseline - boxTop) / scale)
     }
 
     /// The bar's colour on `row` across `columns`: the median of its pixels, leaving out text.
@@ -524,7 +844,7 @@ enum MissionControlCaptionLook {
 
     // MARK: - Text
 
-    private static func textLine(_ text: String, size: CGFloat, color: CGColor?) -> CTLine {
+    static func textLine(_ text: String, size: CGFloat, color: CGColor?) -> CTLine {
         var attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: size)]
         if let color {
             attributes[NSAttributedString.Key(kCTForegroundColorAttributeName as String)] = color
@@ -532,8 +852,15 @@ enum MissionControlCaptionLook {
         return CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
     }
 
-    private static func inkBounds(of text: String, size: CGFloat) -> CGRect {
+    static func inkBounds(of text: String, size: CGFloat) -> CGRect {
         CTLineGetBoundsWithOptions(textLine(text, size: size, color: nil), .useGlyphPathBounds)
+    }
+
+    /// How far right of the middle of `text`'s advance its ink's middle lies, in points, in the system font.
+    static func inkOffset(of text: String, size: CGFloat) -> CGFloat {
+        let line = textLine(text, size: size, color: nil)
+        return CTLineGetBoundsWithOptions(line, .useGlyphPathBounds).midX
+            - CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) / 2
     }
 
     // MARK: - Colour
@@ -566,15 +893,13 @@ enum MissionControlCaptionLook {
         looks: [String: NativeCaptionLook],
         name: String
     ) {
-        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
+        guard let folder = debugFolder(),
               let space = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(
                 data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
                 bytesPerRow: image.width * 4, space: space,
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { return }
-        let folder = caches.appendingPathComponent(Constants.AppInfo.bundleId, isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let height = CGFloat(image.height)
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         for caption in captions {
@@ -590,6 +915,15 @@ enum MissionControlCaptionLook {
         if let matched = context.makeImage() {
             write(matched, to: folder.appendingPathComponent("\(name)-labels.png"))
         }
+    }
+
+    /// Spaceman's caches folder, made if need be.
+    private static func debugFolder() -> URL? {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        else { return nil }
+        let folder = caches.appendingPathComponent(Constants.AppInfo.bundleId, isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
     }
 
     private static func write(_ image: CGImage, to url: URL) {

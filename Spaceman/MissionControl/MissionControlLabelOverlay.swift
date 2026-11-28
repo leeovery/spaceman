@@ -22,9 +22,10 @@
 import AppKit
 
 /// A name label to draw, centred on `centre` on the screen whose frame is `screen`. Both are in
-/// AX coordinates: origin at the top-left of the primary display, y down. With a `look`, the label
-/// is drawn to match the native caption it covers, with its top-left at `lookOrigin`; otherwise as a
-/// box in its space's colour, or black for a space without one.
+/// AX coordinates: origin at the top-left of the primary display, y down. With a `look`, or on a
+/// magnifying bar a `strip` face, the label is drawn to match the native caption it covers, with its
+/// top-left at `lookOrigin`; otherwise as a box: on a `plate`, or in its space's colour, or black for a
+/// space without one.
 struct MissionControlLabel {
     let name: String
     let covers: String
@@ -32,8 +33,12 @@ struct MissionControlLabel {
     let colorHex: String?
     let centre: CGPoint
     let screen: CGRect
-    let look: NativeCaptionLook.Variant?
+    var look: NativeCaptionLook.Variant?
+    var strip: StripFace?
+    var plate: LabelPlate?
     var lookOrigin: CGPoint?
+    /// How far the plate reaches past the `look` either side, in the colour given.
+    var lookPadding: (width: CGFloat, fill: CGColor)?
     /// The height of the bar the label is on: how far a retraction of 1 moves it up.
     var barHeight: CGFloat = 0
     /// The bar's thumbnails sliding sideways to where the label is placed.
@@ -42,6 +47,15 @@ struct MissionControlLabel {
     var grow: TimedMove?
     /// Which label this is, its space's, for the debug recording.
     var key = ""
+}
+
+/// A plain plate a label is drawn on, with its name in the native caption's text: the bar's colour, the text's, the
+/// plate's size, and how far below its top the name's baseline sits.
+struct LabelPlate: Equatable {
+    let fill: CGColor
+    let text: CGColor
+    let size: CGSize
+    let baseline: CGFloat
 }
 
 /// Where a shown label is on screen at a moment, in AX coordinates, for the debug recording.
@@ -54,6 +68,8 @@ final class MissionControlLabelOverlay {
 
     /// Height of one label, which the caption positions are worked out from.
     static var labelHeight: CGFloat { LabelLayer.height }
+    /// How far down each screen the label windows reach: far enough for hover-expanded thumbnails.
+    static let stripHeight: CGFloat = 400
 
     private var windows: [OverlayWindow] = []
     /// Whether the label windows belong to every desktop: see `showOnEveryDesktop`.
@@ -82,6 +98,9 @@ final class MissionControlLabelOverlay {
                 labels.filter { $0.screen == screen }, style: style, retraction: retraction, slide: slide,
                 redrawing: redrawing)
         }
+        for window in windows where window.isVisible && !screens.contains(window.axScreen) {
+            window.show([], style: style, retraction: retraction, slide: nil, redrawing: redrawing)
+        }
         CATransaction.commit()
         // Send the labels' new places to the screen now, not whenever the run loop next idles.
         CATransaction.flush()
@@ -89,13 +108,21 @@ final class MissionControlLabelOverlay {
         let now = ProcessInfo.processInfo.systemUptime
         let raise = now - lastRaise >= Self.raiseInterval
         if raise { lastRaise = now }
-        for window in windows {
-            if screens.contains(window.axScreen) {
-                if raise || !window.isVisible { window.orderFrontRegardless() }
-            } else if window.isVisible {
-                window.orderOut(nil)
-            }
+        for window in windows where screens.contains(window.axScreen) {
+            if raise || !window.isVisible { window.orderFrontRegardless() }
         }
+    }
+
+    /// Puts an empty window on each of `screens` ahead of the labels: a window ordered in reaches the screen
+    /// about three frames after (filmed on macOS 26.7), one made afresh about six, while the labels it then shows
+    /// would be on time. Each stays until `hide`, empty while its screen has no labels.
+    func prepare(screens: [CGRect]) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for screen in screens { window(for: screen).show([], style: .current, retraction: 0, slide: nil) }
+        CATransaction.commit()
+        CATransaction.flush()
+        for screen in screens { window(for: screen).orderFrontRegardless() }
     }
 
     /// Whether any label window is on screen.
@@ -155,6 +182,79 @@ final class MissionControlLabelOverlay {
 
 // MARK: - OverlayWindow
 
+// MARK: - Level
+
+/// A window on screen as the window server lists it, which needs no Screen Recording permission: its layer, its
+/// owner and its bounds in AX coordinates; and its name, where the listing gives one.
+struct ListedWindow: Equatable {
+    let layer: Int
+    let owner: String
+    let pid: pid_t
+    let bounds: CGRect
+    let name: String?
+
+    /// Every window on screen, front to back; nil when the window server lists none.
+    static func onScreen() -> [ListedWindow]? {
+        guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
+        else { return nil }
+        return info.compactMap { entry in
+            guard let layer = entry[kCGWindowLayer as String] as? Int,
+                  let pid = entry[kCGWindowOwnerPID as String] as? pid_t,
+                  let bounds = (entry[kCGWindowBounds as String] as? NSDictionary)
+                    .flatMap({ CGRect(dictionaryRepresentation: $0 as CFDictionary) })
+            else { return nil }
+            return ListedWindow(layer: layer, owner: entry[kCGWindowOwnerName as String] as? String ?? "?", pid: pid,
+                                bounds: bounds, name: entry[kCGWindowName as String] as? String)
+        }
+    }
+}
+
+extension MissionControlLabelOverlay {
+
+    /// The label windows' level: over everything.
+    static let defaultLevel = Int(CGWindowLevelForKey(.screenSaverWindow)) + 1
+    /// How far down a screen's top windows lie entirely to count as the menu bar's: the bar and its status items.
+    static let menuBarDepth: CGFloat = 50
+
+    /// The level the label windows would take, noted in the debug recording only, from the `windows` on screen and
+    /// the bars' `areas`: just above the Dock's highest window there, which holds the Spaces Bar and what Mission
+    /// Control draws, and below the menu bar's windows, or the main menu's level where none shows. As Mission Control
+    /// closes, macOS brings the menu bar back over its captions; there, it would cover the labels too. `defaultLevel`
+    /// with no list, no Dock window there or no room.
+    static func level(
+        windows: [ListedWindow]?, over areas: [CGRect], dockPID: pid_t
+    ) -> (level: Int, reason: String) {
+        guard let windows else { return (defaultLevel, "kept: no window list") }
+        let over = windows.filter { window in areas.contains { $0.intersects(window.bounds) } }
+        guard let dock = over.filter({ $0.pid == dockPID }).map(\.layer).max() else {
+            return (defaultLevel, "kept: no Dock window over the bar")
+        }
+        let menuBar = over.filter { window in
+            window.pid != dockPID && window.layer > 0 && areas.contains {
+                $0.minY <= window.bounds.minY && window.bounds.maxY <= $0.minY + menuBarDepth
+                    && $0.intersects(window.bounds)
+            }
+        }
+        let ceiling = (menuBar.map(\.layer) + [Int(CGWindowLevelForKey(.mainMenuWindow))]).min() ?? dock
+        guard dock + 1 < ceiling else {
+            return (defaultLevel, "kept: no room between the Dock's layer \(dock) and the menu bar's \(ceiling)")
+        }
+        return (dock + 1, "above the Dock's layer \(dock), below the menu bar's \(ceiling)")
+    }
+
+    /// `windows` over the bars' `areas`, for the debug recording: each one off the normal layer as "layer owner
+    /// "name" x,y,w,h", front to back, and how many more are on it.
+    static func describe(_ windows: [ListedWindow], over areas: [CGRect]) -> String {
+        let over = windows.filter { window in areas.contains { $0.intersects(window.bounds) } }
+        let raised = over.filter { $0.layer != 0 }.map { window in
+            let bounds = window.bounds
+            return "\(window.layer) \(window.owner)" + (window.name.map { " \"\($0)\"" } ?? "")
+                + String(format: " %.0f,%.0f,%.0f,%.0f", bounds.minX, bounds.minY, bounds.width, bounds.height)
+        }
+        return (raised + ["+\(over.count - raised.count) at layer 0"]).joined(separator: "; ")
+    }
+}
+
 /// A transparent strip along the top of one screen, tall enough for hover-expanded thumbnails.
 private final class OverlayWindow: NSWindow {
 
@@ -175,7 +275,6 @@ private final class OverlayWindow: NSWindow {
     /// Changed a little each frame while a slide runs, so the window server redraws the window.
     private let nudgeLayer = CALayer()
     private var nudged = false
-    private static let stripHeight: CGFloat = 400
     private static let slideKey = "slide"
     private static let shiftKey = "shift"
     /// Keyframes per slide: one every 4-6ms, finer than a frame.
@@ -184,14 +283,14 @@ private final class OverlayWindow: NSWindow {
     init(screen: CGRect) {
         self.axScreen = screen
         let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
-        let height = min(Self.stripHeight, screen.height)
+        let height = min(MissionControlLabelOverlay.stripHeight, screen.height)
         let frame = CGRect(
             x: screen.minX,
             y: primaryTop - screen.minY - height,
             width: screen.width,
             height: height)
         super.init(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
-        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.screenSaverWindow)) + 1)
+        level = NSWindow.Level(rawValue: MissionControlLabelOverlay.defaultLevel)
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
@@ -229,7 +328,7 @@ private final class OverlayWindow: NSWindow {
 
     func show(
         _ labels: [MissionControlLabel], style: LabelLayer.Style, retraction: CGFloat, slide: TimedSlide?,
-        redrawing: Bool
+        redrawing: Bool = false
     ) {
         while layers.count < labels.count {
             let layer = LabelLayer()
@@ -249,7 +348,7 @@ private final class OverlayWindow: NSWindow {
             layer.configure(label, style: style, scale: scale)
             let size = layer.bounds.size
             // The label's top-left in AX coordinates: a matched look is placed for it; a box is centred.
-            let topLeft = label.lookOrigin
+            let topLeft = label.lookOrigin.map { CGPoint(x: $0.x - (label.lookPadding?.width ?? 0), y: $0.y) }
                 ?? CGPoint(x: label.centre.x - size.width / 2, y: label.centre.y - size.height / 2)
             // Window-local coordinates, with y up from the strip's bottom, on whole device pixels.
             let origin = CGPoint(
@@ -368,8 +467,8 @@ private final class OverlayWindow: NSWindow {
 
 // MARK: - LabelLayer
 
-/// One name label, covering a "Desktop N" caption: the matched look's image, or a box with the
-/// name in its space's colour.
+/// One name label, covering a "Desktop N" caption: the matched look's image, a caption strip cropped
+/// under the name, or a box with the name in its space's colour.
 private final class LabelLayer: CALayer {
 
     struct Style: Equatable {
@@ -386,6 +485,7 @@ private final class LabelLayer: CALayer {
         let maxWidth: CGFloat
         let colorHex: String?
         let style: Style
+        let plate: LabelPlate?
     }
 
     /// The label's key, for the debug recording.
@@ -396,22 +496,29 @@ private final class LabelLayer: CALayer {
 
     private let text = CATextLayer()
     private var content: Content?
-    /// The matched look's image, while showing one.
+    /// The matched look's image, while showing one, and how far past it its plate reaches.
     private var lookImage: CGImage?
+    private var lookPadding: CGFloat = 0
+    /// While showing a strip face, whose strip is the layer's contents: the face, and its name.
+    private var stripFace: StripFace?
+    private let stripName = CALayer()
 
     private static let padding = NSSize(width: 6, height: 2)
     /// Room either side of the name inside the box, as the text field this replaced left.
     private static let textInset: CGFloat = 2
     private static let font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+    private static let plateFont = NSFont.systemFont(ofSize: MissionControlCaptionLook.nativeFontSize)
 
     /// Labels jump to each frame's place: no implicit animation of anything they change.
     private static let noActions: [String: CAAction] = [
         "position": NSNull(), "bounds": NSNull(), "frame": NSNull(), "contents": NSNull(),
         "hidden": NSNull(), "backgroundColor": NSNull(), "cornerRadius": NSNull(),
-        "contentsScale": NSNull(), "string": NSNull(), "foregroundColor": NSNull(),
+        "contentsScale": NSNull(), "string": NSNull(), "foregroundColor": NSNull(), "contentsRect": NSNull(),
     ]
 
-    static var height: CGFloat {
+    static var height: CGFloat { height(of: font) }
+
+    private static func height(of font: NSFont) -> CGFloat {
         ceil(font.ascender - font.descender + font.leading) + padding.height * 2
     }
 
@@ -427,6 +534,10 @@ private final class LabelLayer: CALayer {
         text.alignmentMode = .center
         text.truncationMode = .end
         addSublayer(text)
+        stripName.actions = Self.noActions
+        stripName.isHidden = true
+        addSublayer(stripName)
+        stripName.contentsGravity = .resize
     }
 
     /// Core Animation's copy of a layer, as for its presentation layer.
@@ -444,17 +555,26 @@ private final class LabelLayer: CALayer {
         if contentsScale != scale {
             contentsScale = scale
             text.contentsScale = scale
+            stripName.contentsScale = scale
         }
+        if let face = label.strip {
+            show(face)
+            return
+        }
+        if stripFace != nil { leaveStrip() }
         if let look = label.look {
-            guard look.image !== lookImage else { return }
+            let padding = label.lookPadding?.width ?? 0
+            guard look.image !== lookImage || padding != lookPadding else { return }
             lookImage = look.image
+            lookPadding = padding
             content = nil
             text.isHidden = true
-            backgroundColor = nil
+            backgroundColor = padding > 0 ? label.lookPadding?.fill : nil
             cornerRadius = 0
             contents = look.image
-            contentsGravity = .resize
-            bounds = CGRect(origin: .zero, size: look.frame.size)
+            contentsGravity = padding > 0 ? .center : .resize
+            bounds = CGRect(origin: .zero, size: CGSize(width: look.frame.width + 2 * padding,
+                                                        height: look.frame.height))
             return
         }
         if lookImage != nil {
@@ -464,11 +584,19 @@ private final class LabelLayer: CALayer {
         }
         let wanted = Content(
             name: label.name, covers: label.covers, maxWidth: label.maxWidth,
-            colorHex: label.colorHex, style: style)
+            colorHex: label.colorHex, style: style, plate: label.plate)
         guard wanted != content else { return }
         content = wanted
 
         text.string = label.name
+        if let plate = label.plate {
+            show(plate)
+            return
+        }
+        let font = Self.font
+        let height = Self.height(of: font)
+        text.font = font
+        text.fontSize = font.pointSize
         if let hex = label.colorHex, let color = NSColor.fromHex(hex) {
             backgroundColor = color.cgColor
             text.foregroundColor = color.contrastingTextColor.cgColor
@@ -477,17 +605,65 @@ private final class LabelLayer: CALayer {
             text.foregroundColor = NSColor.white.cgColor
         }
         let iconStyle = IconStyle(rawValue: style.decoration) ?? .filledRounded
-        cornerRadius = iconStyle.cornerRadius(for: NSRect(x: 0, y: 0, width: 0, height: Self.height))
+        cornerRadius = iconStyle.cornerRadius(for: NSRect(x: 0, y: 0, width: 0, height: height))
 
-        let attrs: [NSAttributedString.Key: Any] = [.font: Self.font]
+        let attrs: [NSAttributedString.Key: Any] = [.font: font]
         let nameWidth = (label.name as NSString).size(withAttributes: attrs).width
         let coversWidth = (label.covers as NSString).size(withAttributes: attrs).width
         let width = min(
             ceil(max(nameWidth, coversWidth) + Self.textInset * 2) + Self.padding.width * 2, label.maxWidth)
-        bounds = CGRect(x: 0, y: 0, width: width, height: Self.height)
+        bounds = CGRect(x: 0, y: 0, width: width, height: height)
         // A text layer draws its line from the top: this centres it in the box as the text field did.
-        text.frame = CGRect(
-            x: 0, y: Self.padding.height, width: width, height: Self.height - Self.padding.height * 2)
+        text.frame = CGRect(x: 0, y: Self.padding.height, width: width, height: height - Self.padding.height * 2)
+    }
+
+    /// Shows the name, already set, on `plate`, its baseline where the plate has it.
+    private func show(_ plate: LabelPlate) {
+        let font = Self.plateFont
+        text.font = font
+        text.fontSize = font.pointSize
+        text.foregroundColor = plate.text
+        backgroundColor = plate.fill
+        cornerRadius = 0
+        bounds = CGRect(origin: .zero, size: plate.size)
+        let line = ceil(font.ascender - font.descender + font.leading)
+        text.frame = CGRect(x: 0, y: plate.size.height - (plate.baseline - font.ascender) - line,
+                            width: plate.size.width, height: line)
+    }
+
+    /// Shows `face`: its strip as the layer's contents, cropped to the part behind the label, under its name and pill.
+    private func show(_ face: StripFace) {
+        guard face != stripFace else { return }
+        if stripFace == nil {
+            lookImage = nil
+            content = nil
+            text.isHidden = true
+            backgroundColor = nil
+            cornerRadius = 0
+            contentsGravity = .resize
+            stripName.isHidden = false
+        }
+        if stripFace?.strip !== face.strip { contents = face.strip }
+        stripFace = face
+        contentsRect = face.contentsRect
+        let layout = face.layout
+        bounds = CGRect(origin: .zero, size: layout.size)
+        stripName.contents = face.name
+        stripName.frame = Self.layerFrame(layout.nameFrame, height: layout.size.height)
+    }
+
+    private func leaveStrip() {
+        stripFace = nil
+        contents = nil
+        contentsRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+        stripName.isHidden = true
+        text.isHidden = false
+        content = nil
+    }
+
+    /// `frame`, in points from the top-left of a layer `height` tall, y down, in the layer's own coordinates, y up.
+    private static func layerFrame(_ frame: CGRect, height: CGFloat) -> CGRect {
+        CGRect(x: frame.minX, y: height - frame.maxY, width: frame.width, height: frame.height)
     }
 
     /// The offset its own move gives it at `time`, in AX directions (y down).

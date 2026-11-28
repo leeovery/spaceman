@@ -25,6 +25,62 @@ extension MissionControlLabels {
         MissionControlMotionRecorder.shared.noteDrawn(overlay.drawnLabels(at: frameTime), at: frameTime)
     }
 
+    /// Notes in the debug motion recording, when it is on and it changes, which labels each bar shows: all,
+    /// or on a magnifying bar those shown about the hovered thumbnail, by their spaces left to right, or none.
+    func recordShown(_ shownByBar: [(bar: BarLayout, shown: ShownLabels)], at frameTime: TimeInterval) {
+        guard MissionControlMotionRecorder.isEnabled else { return }
+        let line = "labels shown: "
+            + shownByBar.map { Self.shownRecord(bar: $0.bar, shown: $0.shown) }.joined(separator: ", ")
+        guard line != lastShownRecord else { return }
+        lastShownRecord = line
+        record(line, at: frameTime)
+    }
+
+    /// "display <id> all", "display <id> none", or "display <id> hovered 9+10": the spaces whose labels `bar` shows.
+    static func shownRecord(bar: BarLayout, shown: ShownLabels) -> String {
+        let which: String
+        switch shown {
+        case .all: which = "all"
+        case .none: which = "none"
+        case .only:
+            which = "hovered " + shown.places.map {
+                bar.spaceIDs.indices.contains($0) ? bar.spaceIDs[$0] : "place \($0 + 1)"
+            }.joined(separator: "+")
+        }
+        return "display \(bar.displayID) \(which)"
+    }
+
+    /// "display <id> thumbnails <x>,<width> ...": each thumbnail's left edge and width as the Dock last reported
+    /// them, in points, to check a magnifying bar's against the film.
+    static func thumbnailFrames(of bar: BarLayout) -> String {
+        "display \(bar.displayID) thumbnails " + bar.buttons.map {
+            String(format: "%.1f,%.1f", $0.frame.minX, $0.frame.width)
+        }.joined(separator: " ")
+    }
+
+    /// Has WindowManager's Spaces Bar buttons read for the debug recording, when it is on, and the Dock's
+    /// with `missionControlMotionDockButtons` too: each probe reads off the main thread, as often as its app
+    /// answers, at most once a frame. The Dock's is off by default, as it delays the labels' own readings.
+    func recordBars() {
+        guard MissionControlMotionRecorder.isEnabled else { return }
+        if let pid = pid(of: "com.apple.WindowManager") { windowManagerProbe.request(pid: pid) }
+        if UserDefaults.standard.bool(forKey: "missionControlMotionDockButtons"), let pid = pid(of: "com.apple.dock") {
+            dockProbe.request(pid: pid)
+        }
+    }
+
+    /// WindowManager's Spaces Bars, found as `poll()` finds them on macOS 27. Any thread.
+    static func windowManagerBars(in windowManager: AXUIElement) -> [AXUIElement] {
+        AX.spacesBars(in: windowManager, depthLimit: 2) { AX.identifier(of: $0) == "mc.spaces" }
+    }
+
+    /// The Dock's Spaces Bars, found as the Dock reader finds them. Any thread.
+    static func dockBars(in dock: AXUIElement) -> [AXUIElement] {
+        AX.children(of: dock).filter { AX.title(of: $0) == "Mission Control" }.flatMap { missionControl in
+            AX.spacesBars(in: missionControl, depthLimit: 3) { AX.title(of: $0) == "Spaces Bar" }
+        }
+    }
+
     func recordPointer() {
         guard MissionControlMotionRecorder.isEnabled else { return }
         let point = NSEvent.mouseLocation
@@ -55,7 +111,7 @@ extension MissionControlLabels {
         }
         let bar = bars.first { $0.screen == drag.screen }
         let caption = bar?.captions.first { $0.spaceID == drag.spaceID }
-        let drawn = caption.map { caption in labels.contains { $0.name == caption.name && $0.screen == drag.screen } }
+        let drawn = caption.map { caption in labels.contains { $0.key == caption.spaceID && $0.screen == drag.screen } }
         let line = "drag of space \(drag.spaceID ?? "none"): bar \(bar == nil ? "missing" : "found"), caption "
             + "\(caption.map { "\($0.covers) at \(Int($0.centre.x.rounded()))" } ?? "missing"), label "
             + "\(drawn.map { $0 ? "drawn" : "hidden" } ?? "-"), gap \(drag.gap), dropped \(drag.dropped)"
@@ -73,7 +129,7 @@ extension MissionControlLabels {
             droppedSpace = nil
             return
         }
-        let kind = found.map { $0.exact ? "exact" : $0.sameHeight ? "this height" : "other height" } ?? "none"
+        let kind = found.map { $0.exact ? "exact" : "by name" } ?? "none"
         let origin = label.lookOrigin.map { String(format: "%.0f,%.0f", $0.x, $0.y) } ?? "centred"
         record(String(format: "dropped %@ %@, caption %.0f,%.0f, look %@ at %@", caption.name, caption.covers,
                       caption.centre.x, caption.centre.y, kind, origin), at: time)
@@ -86,7 +142,7 @@ extension MissionControlLabels {
             guard let label = labels.first(where: { $0.key == caption.spaceID && $0.screen == bar.screen }) else {
                 return "\(caption.covers) at x \(Int(caption.centre.x.rounded())) not covered"
             }
-            let look = label.look == nil ? "box"
+            let look = label.strip != nil ? "strip" : label.look == nil ? "box"
                 : captionLooks.look(for: caption, on: bar)?.exact == true ? "exact" : "borrowed"
             let lift = retraction * bar.frame.height
             let drawn = label.lookOrigin.map { "\(Int($0.x.rounded())),\(Int(($0.y - lift).rounded()))" } ?? "centred"

@@ -35,7 +35,7 @@ extension MissionControlLabels {
         let source = screens.first { $0.frame.contains(first) }
         let fallbackWidth = found.first?.frame.width ?? 0
         let result = Self.match(found, centres: centres, fallbackWidth: fallbackWidth,
-                                spaceIDs: Self.orderedSpaceIDs(displayUUID: source?.uuid))
+                                spaceIDs: Self.orderedSpaceIDs(displayUUID: source?.uuid), labelsUnnamed: true)
         logMismatch(result.mismatch)
         var captions = result.captions
 
@@ -46,7 +46,7 @@ extension MissionControlLabels {
             let offsetY = target.frame.minY - source.frame.minY
             let moved = centres.map { CGPoint(x: $0.x + offsetX, y: $0.y + offsetY) }
             let mirrored = Self.match(found, centres: moved, fallbackWidth: fallbackWidth,
-                                      spaceIDs: Self.orderedSpaceIDs(displayUUID: target.uuid))
+                                      spaceIDs: Self.orderedSpaceIDs(displayUUID: target.uuid), labelsUnnamed: true)
             logMismatch(mirrored.mismatch)
             captions += mirrored.captions
         }
@@ -70,55 +70,80 @@ extension MissionControlLabels {
         return spaces?.count == 1
     }
 
-    /// The captions of one Dock Spaces Bar on `screen`; a caption can sit above its screen while
-    /// the bar slides in or out. Safe off the main thread.
-    static func dockCaptions(_ found: [AX.Button], screen: ScreenInfo)
-        -> (captions: [Caption], mismatch: String?) {
-        let centres = found.map {
-            // Dock: AX frame is top-left origin
-            // Caption "Desktop N" sits below the frame
-            // Spaces bar (small ~24pt high): caption ~15pt below frame
-            // Thumbnails (~77pt high): caption ~8pt below frame
-            let gapToCaption: CGFloat = $0.frame.height < 40 ? 18 : 8
-            let captionY = $0.frame.maxY + gapToCaption + MissionControlLabelOverlay.labelHeight / 2
-            return CGPoint(x: $0.frame.midX, y: captionY)
-        }
-        return match(found, centres: centres, fallbackWidth: found.first?.frame.width ?? 0,
-                     spaceIDs: orderedSpaceIDs(displayUUID: screen.uuid))
+    /// The captions of one Dock Spaces Bar on `screen`, and every thumbnail's space when they match; a
+    /// caption can sit above its screen while the bar slides in or out. Safe off the main thread.
+    static func dockCaptions(_ found: [AX.Button], screen: ScreenInfo, labelsUnnamed: Bool)
+        -> (captions: [Caption], spaceIDs: [String], mismatch: String?) {
+        let spaceIDs = orderedSpaceIDs(displayUUID: screen.uuid)
+        let result = dockCaptions(found, spaceIDs: spaceIDs, labelsUnnamed: labelsUnnamed)
+        return (result.captions, spaceIDs.count == found.count ? spaceIDs : [], result.mismatch)
     }
 
-    /// Matches thumbnails to spaces and looks up names from SpaceNameStore. Safe off the main thread.
-    fileprivate static func match(
+    /// The captions of Dock thumbnails `found` showing the spaces `spaceIDs`.
+    static func dockCaptions(
+        _ found: [AX.Button],
+        spaceIDs: [String],
+        labelsUnnamed: Bool,
+        storedNames: [String: SpaceNameInfo] = SpaceNameStore.shared.loadAll()
+    ) -> (captions: [Caption], mismatch: String?) {
+        let centres = found.map { captionCentre(below: $0.frame) }
+        return match(found, centres: centres, fallbackWidth: found.first?.frame.width ?? 0, spaceIDs: spaceIDs,
+                     labelsUnnamed: labelsUnnamed, storedNames: storedNames)
+    }
+
+    /// Where the Dock's caption sits under a thumbnail with AX frame `frame`, top-left origin: about 15pt
+    /// below a bar of names (~24pt high), 8pt below thumbnails (~77pt high).
+    static func captionCentre(below frame: CGRect) -> CGPoint {
+        let gapToCaption: CGFloat = frame.height < 40 ? 18 : 8
+        return CGPoint(x: frame.midX, y: frame.maxY + gapToCaption + MissionControlLabelOverlay.labelHeight / 2)
+    }
+
+    /// How wide the label over the caption at `centres[index]` may be: up to the nearest neighbour's.
+    static func labelWidth(at index: Int, centres: [CGPoint], fallbackWidth: CGFloat) -> CGFloat {
+        let neighbours = [index - 1, index + 1]
+            .filter(centres.indices.contains)
+            .map { abs(centres[$0].x - centres[index].x) }
+        return (neighbours.min() ?? fallbackWidth) - labelGap
+    }
+
+    /// Matches thumbnails to spaces and their stored names and colours. A space never named gets a label
+    /// reading its caption's own title when `labelsUnnamed`; otherwise none, so the Dock's own caption
+    /// shows. Safe off the main thread.
+    static func match(
         _ found: [AX.Button],
         centres: [CGPoint],
         fallbackWidth: CGFloat,
-        spaceIDs: [String]
+        spaceIDs: [String],
+        labelsUnnamed: Bool,
+        storedNames: [String: SpaceNameInfo] = SpaceNameStore.shared.loadAll()
     ) -> (captions: [Caption], mismatch: String?) {
         guard !centres.isEmpty else { return ([], nil) }
         guard spaceIDs.count == found.count else {
             return ([], "\(found.count) thumbnails but \(spaceIDs.count) spaces")
         }
 
-        let storedNames = SpaceNameStore.shared.loadAll()
         let captions = centres.indices.compactMap { index -> Caption? in
             let spaceID = spaceIDs[index]
-            // A space never named shows the Dock's own caption.
-            guard let nameInfo = storedNames[spaceID], !nameInfo.spaceName.isEmpty,
-                  nameInfo.spaceName != SpaceObserver.unnamedSpaceName
+            let nameInfo = storedNames[spaceID]
+            let title = found[index].title
+            guard let name = givenName(nameInfo) ?? (labelsUnnamed && !title.isEmpty ? title : nil)
             else { return nil }
-            let neighbours = [index - 1, index + 1]
-                .filter(centres.indices.contains)
-                .map { abs(centres[$0].x - centres[index].x) }
-            let width = (neighbours.min() ?? fallbackWidth) - labelGap
             return Caption(
                 centre: centres[index],
-                maxWidth: width,
-                covers: found[index].title,
-                name: nameInfo.spaceName,
-                colorHex: nameInfo.colorHex,
+                maxWidth: labelWidth(at: index, centres: centres, fallbackWidth: fallbackWidth),
+                index: index,
+                covers: title,
+                name: name,
+                colorHex: nameInfo?.colorHex,
                 spaceID: spaceID)
         }
         return (captions, nil)
+    }
+
+    /// The name the user gave a space, or nil when it has none.
+    private static func givenName(_ nameInfo: SpaceNameInfo?) -> String? {
+        guard let name = nameInfo?.spaceName, !name.isEmpty, name != SpaceObserver.unnamedSpaceName else { return nil }
+        return name
     }
 
     // MARK: - Spaces, in the order Mission Control shows them

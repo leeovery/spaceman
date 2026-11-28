@@ -32,8 +32,9 @@ extension MissionControlLabels {
     }
 
     /// A click on a thumbnail closes Mission Control into that desktop, the bar sliding up as it goes,
-    /// which the Dock reports only some way in: slide the labels up with it from the click. A click on
-    /// the add button, or on a thumbnail's close button, waits for the window server to confirm it.
+    /// which the Dock reports only some way in: slide the labels up with it from the click. So does a click off the
+    /// bars while one shows thumbnails. A click on the add button, or on a thumbnail's close button, waits for the
+    /// window server to confirm it.
     func handleClick(at point: CGPoint) {
         let time = ProcessInfo.processInfo.systemUptime
         let change = restingLayouts.lazy.compactMap { Self.desktopChange(bar: $0, at: point) }.first
@@ -44,24 +45,41 @@ extension MissionControlLabels {
             return
         }
         guard let bar = restingLayouts.first(where: { bar in bar.buttons.contains { $0.frame.contains(point) } }),
-              let button = bar.buttons.first(where: { $0.frame.contains(point) })
-        else { return }
+              let place = bar.buttons.firstIndex(where: { $0.frame.contains(point) })
+        else {
+            if Self.closesThumbnails(clickedAt: point, bars: restingLayouts) {
+                noteMotion()
+                slide = TimedSlide(timing: DockMotion.clickClose, reference: time, from: 0, to: 1)
+                record("close expanded from a click", at: time)
+                noteWindowsOverBars(at: "closing")
+            }
+            return
+        }
+        let button = bar.buttons[place]
         let reading = reader.latest(waitingUpTo: 0)
         let current = reading.layouts.indices.contains { index in
             reading.layouts[index].screen == bar.screen && index < reading.selected.count
-                && reading.selected[index] == button.title
+                && reading.selected[index] == place
         }
         noteMotion()
         if current {
             // This desktop: Mission Control closes, the bar sliding up.
             slide = TimedSlide(timing: DockMotion.choose, reference: time, from: 0, to: 1)
             record("chose this desktop", at: time)
+            noteWindowsOverBars(at: "closing")
             return
         }
         // Another desktop zooms out of its thumbnail over the bar, which stays where it is, its captions
         // showing until the zoom covers them: so do the labels, kept to this desktop since they came in.
         zoom = (bar.screen, button.frame, time)
         record("chose \(button.title)", at: time)
+    }
+
+    /// Whether a click at `point` closes Mission Control from `bars` as a click on a window or the desktop does,
+    /// a bar of thumbnails sliding up: off every bar, with one of them showing thumbnails. A bar of names closes as
+    /// the Dock reports it, soon after such a click.
+    static func closesThumbnails(clickedAt point: CGPoint, bars: [BarLayout]) -> Bool {
+        bars.contains { $0.frame.height > expandedBarHeight } && !bars.contains { $0.frame.contains(point) }
     }
 
     /// What a click at `point` on `bar` does to its desktops, if anything: the add button in the
@@ -95,7 +113,8 @@ extension MissionControlLabels {
         let began = spaceChangeBeganAt.flatMap { time - $0 < Self.spaceChangeWindow ? $0 : nil }
         spaceChangeBeganAt = nil
         reflow = Reflow(screen: after.screen, timing: timing, reference: began ?? time - timing.delay,
-                        from: Self.centres(of: before.atRest()), count: after.buttons.count)
+                        from: Self.centres(of: before.atRest()), spacesBefore: before.spaceIDs,
+                        count: after.buttons.count)
         shift = nil
         record(added ? "desktop added" : "desktop removed", at: began ?? time)
         return true
@@ -114,34 +133,47 @@ extension MissionControlLabels {
             count = before.buttons.count + 1
             removed = nil
         case .remove(_, let index):
+            guard before.buttons.indices.contains(index) else { return }
             count = before.buttons.count - 1
             removed = index
         }
-        let known = expandedLayoutsByCount["\(before.displayID)|\(count)"]
+        let known = Self.knownLayout(of: count, on: before, in: expandedLayoutsByCount)
         let centres = known.map { $0.buttons.map(\.frame.midX) } ?? before.buttons.first.map { first in
             Self.predictedCentres(
                 count: count, shown: before.buttons.count, screenMinX: before.screen.minX,
                 screenWidth: before.screen.width, width: first.frame.width,
                 spacing: before.buttons.count > 1 ? before.buttons[1].frame.midX - first.frame.midX : first.frame.width)
         } ?? []
-        guard centres.count == count else { return }
-        var predicted = before
-        predicted.captions = before.captions.compactMap { caption in
-            guard let index = before.buttons.firstIndex(where: { $0.frame.minX <= caption.centre.x
-                && caption.centre.x <= $0.frame.maxX }), index != removed
-            else { return nil }
-            let place = removed.map { index > $0 ? index - 1 : index } ?? index
-            let spacing = count > 1 ? abs(centres[1] - centres[0]) : caption.maxWidth + Self.labelGap
-            return Caption(
-                centre: CGPoint(x: centres[place], y: caption.centre.y), maxWidth: spacing - Self.labelGap,
-                covers: caption.covers, name: caption.name, colorHex: caption.colorHex, spaceID: caption.spaceID)
-        }
+        guard centres.count == count,
+              let predicted = Self.predictedLayout(before, centres: centres, removing: removed)
+        else { return }
         let timing: DockMotion.Timing
         if case .add = change { timing = DockMotion.add } else { timing = DockMotion.remove }
         reflow = Reflow(screen: before.screen, timing: timing, reference: time, from: Self.centres(of: before),
-                        count: count, predicted: predicted)
+                        spacesBefore: before.spaceIDs, count: count, predicted: predicted)
         shift = nil
         record("\(change) from the click" + (known == nil ? ", places worked out" : ", places seen before"), at: time)
+    }
+
+    /// `before`'s labels at the thumbnails' places `centres` once the one at `removed`, if any, is gone,
+    /// or nil when a label's place falls outside them, as when a measurement already left it out.
+    static func predictedLayout(_ before: BarLayout, centres: [CGFloat], removing removed: Int?) -> BarLayout? {
+        var predicted = before
+        // Which space each thumbnail shows is known only once the Dock reports them.
+        predicted.spaceIDs = []
+        var captions: [Caption] = []
+        for caption in before.captions where caption.index != removed {
+            let place = removed.map { caption.index > $0 ? caption.index - 1 : caption.index } ?? caption.index
+            guard centres.indices.contains(place) else { return nil }
+            let spacing = centres.count > 1 ? abs(centres[1] - centres[0]) : caption.maxWidth + labelGap
+            var moved = caption
+            moved.centre.x = centres[place]
+            moved.maxWidth = spacing - labelGap
+            moved.index = place
+            captions.append(moved)
+        }
+        predicted.captions = captions
+        return predicted
     }
 
     private static func centres(of bar: BarLayout) -> [String: CGPoint] {
